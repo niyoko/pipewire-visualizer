@@ -38,10 +38,6 @@ typedef struct {
   int y;
   int width;
   int height;
-  int drag_start_x;
-  int drag_start_y;
-  int resize_start_width;
-  int resize_start_height;
 } AppState;
 
 static void push_sample(float s) {
@@ -328,11 +324,7 @@ static void drag_begin_cb(GtkGestureDrag *gesture, double start_x,
   (void)gesture;
   (void)start_x;
   (void)start_y;
-
-  AppState *state = data;
-
-  state->drag_start_x = state->x;
-  state->drag_start_y = state->y;
+  (void)data;
 }
 
 static void drag_update_cb(GtkGestureDrag *gesture, double offset_x,
@@ -341,8 +333,8 @@ static void drag_update_cb(GtkGestureDrag *gesture, double offset_x,
 
   AppState *state = data;
 
-  state->x = MAX(0, state->drag_start_x + (int)offset_x);
-  state->y = MAX(0, state->drag_start_y + (int)offset_y);
+  state->x = MAX(0, state->x + (int)round(offset_x));
+  state->y = MAX(0, state->y + (int)round(offset_y));
   apply_layer_position(state);
 }
 
@@ -351,11 +343,7 @@ static void resize_begin_cb(GtkGestureDrag *gesture, double start_x,
   (void)gesture;
   (void)start_x;
   (void)start_y;
-
-  AppState *state = data;
-
-  state->resize_start_width = state->width;
-  state->resize_start_height = state->height;
+  (void)data;
 }
 
 static void resize_update_cb(GtkGestureDrag *gesture, double offset_x,
@@ -364,9 +352,8 @@ static void resize_update_cb(GtkGestureDrag *gesture, double offset_x,
 
   AppState *state = data;
 
-  state->width = MAX(MIN_WINDOW_WIDTH, state->resize_start_width + (int)offset_x);
-  state->height =
-      MAX(MIN_WINDOW_HEIGHT, state->resize_start_height + (int)offset_y);
+  state->width = MAX(MIN_WINDOW_WIDTH, state->width + (int)round(offset_x));
+  state->height = MAX(MIN_WINDOW_HEIGHT, state->height + (int)round(offset_y));
 
   gtk_window_set_default_size(state->window, state->width, state->height);
   update_input_region(state);
