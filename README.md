@@ -17,9 +17,9 @@ windows, and is fully click-through.
 
 - PipeWire audio capture for system playback from browsers, music players, and
   other desktop audio sources.
-- Real-time FFT spectrum analysis using FFTW, with Winamp Classic Visualizer-style equalization,
-  envelope, scale, logarithmic binning, peak/average bar levels, falloff, and
-  peak motion controls.
+- Real-time FFT spectrum analysis using FFTW, with Winamp Classic
+  Visualizer-style equalization, envelope, scale, logarithmic binning,
+  peak/average bar levels, falloff, target FPS, and peak motion controls.
 - Classic Spectrum Analyzer inspired visuals, including frequency bar styles,
   background modes, peak colour modes, peak motion modes, block geometry, alpha
   controls, and configurable colours.
@@ -153,9 +153,9 @@ The overlay window background is transparent unless a background mode or alpha
 is configured; spectrum bars and peaks render with alpha. Use
 `Ctrl+Shift+Alt+F12` to open the settings window.
 Settings include analyzer mode, bar count, WACUP-style FFT equalization,
-envelope and scale, level mode, display threshold, falloff, window anchor,
-margins, size, bar width, spacing, block size, peak behavior, alpha, bar
-opacity, colours, Now Playing metadata, and lyrics.
+envelope and scale, level mode, display threshold, target FPS, falloff, window
+anchor, margins, size, bar width, spacing, block size, peak behavior, alpha,
+bar opacity, colours, Now Playing metadata, and lyrics.
 
 The Style page exposes the Winamp-era categories shown by the
 original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,

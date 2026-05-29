@@ -76,6 +76,7 @@ typedef struct {
   int x_margin;
   int y_margin;
   int now_playing_height;
+  int target_fps;
   int falloff_rate;
   int peak_change_rate;
   float peak_fall_per_frame;

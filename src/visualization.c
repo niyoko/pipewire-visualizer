@@ -31,6 +31,9 @@ typedef struct {
   float bars[PWVIZ_BAR_COUNT];
   float peak_caps[PWVIZ_BAR_COUNT];
   int peak_holds[PWVIZ_BAR_COUNT];
+  cairo_surface_t *now_playing_surface;
+  char *now_playing_cache_key;
+  guint animation_source;
   guint now_playing_source;
   guint lyrics_offset_message_source;
   GAsyncQueue *lyrics_results;
@@ -61,6 +64,7 @@ typedef enum {
 
 enum {
   INACTIVE_BAR_ALPHA = 0,
+  TARGET_FPS = 60,
   LYRICS_OFFSET_STEP_MS = 250,
   LYRICS_OFFSET_MESSAGE_MS = 1600,
 };
@@ -474,6 +478,64 @@ static char *now_playing_text(PwvizVisualizer *visualizer) {
   return g_string_free(line, FALSE);
 }
 
+static void append_rgba_key(GString *key, const GdkRGBA *color) {
+  g_string_append_printf(key, "%.3f,%.3f,%.3f,%.3f", color->red,
+                         color->green, color->blue, color->alpha);
+}
+
+static char *now_playing_cache_key(PwvizVisualizer *visualizer, int width,
+                                   int height, int section_h,
+                                   const char *text,
+                                   const char *current_lyric,
+                                   const char *next_lyric) {
+  const PwvizAppConfig *config = &visualizer->config;
+  GString *key = g_string_new(NULL);
+
+  g_string_append_printf(key, "%dx%dx%d|%s|%s|%s|%.3f", width, height,
+                         section_h, text ? text : "",
+                         current_lyric ? current_lyric : "",
+                         next_lyric ? next_lyric : "",
+                         config->now_playing_alpha);
+
+  g_string_append_printf(key, "|np:%s|%.3f|", config->now_playing_font,
+                         config->now_playing_outline_width);
+  append_rgba_key(key, &config->now_playing_text_color);
+  g_string_append_c(key, '|');
+  append_rgba_key(key, &config->now_playing_outline_color);
+  g_string_append_c(key, '|');
+  append_rgba_key(key, &config->now_playing_shadow_color);
+  g_string_append_printf(key, "|%.3f,%.3f,%.3f",
+                         config->now_playing_shadow_x,
+                         config->now_playing_shadow_y,
+                         config->now_playing_shadow_opacity);
+
+  g_string_append_printf(key, "|lyrics:%d|top:%s|%.3f|",
+                         config->lyrics_two_lines, config->lyrics_top_font,
+                         config->lyrics_top_outline_width);
+  append_rgba_key(key, &config->lyrics_top_text_color);
+  g_string_append_c(key, '|');
+  append_rgba_key(key, &config->lyrics_top_outline_color);
+  g_string_append_c(key, '|');
+  append_rgba_key(key, &config->lyrics_top_shadow_color);
+  g_string_append_printf(key, "|%.3f,%.3f,%.3f|bottom:%s|%.3f|",
+                         config->lyrics_top_shadow_x,
+                         config->lyrics_top_shadow_y,
+                         config->lyrics_top_shadow_opacity,
+                         config->lyrics_bottom_font,
+                         config->lyrics_bottom_outline_width);
+  append_rgba_key(key, &config->lyrics_bottom_text_color);
+  g_string_append_c(key, '|');
+  append_rgba_key(key, &config->lyrics_bottom_outline_color);
+  g_string_append_c(key, '|');
+  append_rgba_key(key, &config->lyrics_bottom_shadow_color);
+  g_string_append_printf(key, "|%.3f,%.3f,%.3f",
+                         config->lyrics_bottom_shadow_x,
+                         config->lyrics_bottom_shadow_y,
+                         config->lyrics_bottom_shadow_opacity);
+
+  return g_string_free(key, FALSE);
+}
+
 static void draw_ellipsized_text(cairo_t *cr, const char *text,
                                  const char *font_desc, double x, double y,
                                  int width,
@@ -534,8 +596,11 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
                              int width, int height) {
   int section_h = now_playing_height(visualizer);
 
-  if (section_h <= 0)
+  if (section_h <= 0) {
+    g_clear_pointer(&visualizer->now_playing_surface, cairo_surface_destroy);
+    g_clear_pointer(&visualizer->now_playing_cache_key, g_free);
     return;
+  }
 
   char *text = visualizer->lyrics_offset_message[0] != '\0'
                    ? g_strdup(visualizer->lyrics_offset_message)
@@ -545,12 +610,6 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
     return;
   }
 
-  double y = height - section_h;
-  double alpha = CLAMP(visualizer->config.now_playing_alpha, 0.0, 1.0);
-  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, alpha);
-  cairo_rectangle(cr, 0.0, y, width, section_h);
-  cairo_fill(cr);
-
   const char *current_lyric = NULL;
   const char *next_lyric = NULL;
   if (visualizer->config.lyrics_enabled)
@@ -558,58 +617,84 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
                                visualizer->now_playing.position_us,
                                &current_lyric, &next_lyric);
 
-  int content_w = MAX(1, width - 16);
-  int metadata_size = font_pixel_size(visualizer->config.now_playing_font, 13);
-  int top_lyric_size =
-      font_pixel_size(visualizer->config.lyrics_top_font, 12);
-  int bottom_lyric_size =
-      font_pixel_size(visualizer->config.lyrics_bottom_font, 12);
-  if (current_lyric) {
-    double title_y = y + 7.0;
-    double current_y = y + 10.0 + metadata_size + 8.0;
-    double next_y = current_y + top_lyric_size + 10.0;
+  char *cache_key = now_playing_cache_key(visualizer, width, height, section_h,
+                                          text, current_lyric, next_lyric);
+  if (!visualizer->now_playing_surface ||
+      g_strcmp0(visualizer->now_playing_cache_key, cache_key) != 0) {
+    g_clear_pointer(&visualizer->now_playing_surface, cairo_surface_destroy);
+    g_free(visualizer->now_playing_cache_key);
+    visualizer->now_playing_cache_key = g_steal_pointer(&cache_key);
+    visualizer->now_playing_surface = cairo_image_surface_create(
+        CAIRO_FORMAT_ARGB32, MAX(1, width), MAX(1, section_h));
+    cairo_t *surface_cr = cairo_create(visualizer->now_playing_surface);
+    double alpha = CLAMP(visualizer->config.now_playing_alpha, 0.0, 1.0);
 
-    draw_ellipsized_text(cr, text, visualizer->config.now_playing_font, 8.0,
-                         title_y, content_w,
-                         &visualizer->config.now_playing_text_color,
-                         &visualizer->config.now_playing_outline_color,
-                         visualizer->config.now_playing_outline_width,
-                         &visualizer->config.now_playing_shadow_color,
-                         visualizer->config.now_playing_shadow_x,
-                         visualizer->config.now_playing_shadow_y,
-                         visualizer->config.now_playing_shadow_opacity, 0.78);
-    draw_ellipsized_text(
-        cr, current_lyric, visualizer->config.lyrics_top_font, 8.0, current_y,
-        content_w, &visualizer->config.lyrics_top_text_color,
-        &visualizer->config.lyrics_top_outline_color,
-        visualizer->config.lyrics_top_outline_width,
-        &visualizer->config.lyrics_top_shadow_color,
-        visualizer->config.lyrics_top_shadow_x,
-        visualizer->config.lyrics_top_shadow_y,
-        visualizer->config.lyrics_top_shadow_opacity, 0.98);
-    if (visualizer->config.lyrics_two_lines && next_lyric &&
-        next_y + bottom_lyric_size <= y + section_h - 4.0)
+    cairo_set_source_rgba(surface_cr, 0.0, 0.0, 0.0, alpha);
+    cairo_rectangle(surface_cr, 0.0, 0.0, width, section_h);
+    cairo_fill(surface_cr);
+
+    int content_w = MAX(1, width - 16);
+    int metadata_size =
+        font_pixel_size(visualizer->config.now_playing_font, 13);
+    int top_lyric_size =
+        font_pixel_size(visualizer->config.lyrics_top_font, 12);
+    int bottom_lyric_size =
+        font_pixel_size(visualizer->config.lyrics_bottom_font, 12);
+    if (current_lyric) {
+      double title_y = 7.0;
+      double current_y = 10.0 + metadata_size + 8.0;
+      double next_y = current_y + top_lyric_size + 10.0;
+
+      draw_ellipsized_text(surface_cr, text,
+                           visualizer->config.now_playing_font, 8.0, title_y,
+                           content_w,
+                           &visualizer->config.now_playing_text_color,
+                           &visualizer->config.now_playing_outline_color,
+                           visualizer->config.now_playing_outline_width,
+                           &visualizer->config.now_playing_shadow_color,
+                           visualizer->config.now_playing_shadow_x,
+                           visualizer->config.now_playing_shadow_y,
+                           visualizer->config.now_playing_shadow_opacity, 0.78);
       draw_ellipsized_text(
-          cr, next_lyric, visualizer->config.lyrics_bottom_font, 8.0, next_y,
-          content_w, &visualizer->config.lyrics_bottom_text_color,
-          &visualizer->config.lyrics_bottom_outline_color,
-          visualizer->config.lyrics_bottom_outline_width,
-          &visualizer->config.lyrics_bottom_shadow_color,
-          visualizer->config.lyrics_bottom_shadow_x,
-          visualizer->config.lyrics_bottom_shadow_y,
-          visualizer->config.lyrics_bottom_shadow_opacity, 0.62);
-  } else {
-    draw_ellipsized_text(cr, text, visualizer->config.now_playing_font,
-                         8.0, y + MAX(0, section_h - metadata_size) / 2.0,
-                         content_w, &visualizer->config.now_playing_text_color,
-                         &visualizer->config.now_playing_outline_color,
-                         visualizer->config.now_playing_outline_width,
-                         &visualizer->config.now_playing_shadow_color,
-                         visualizer->config.now_playing_shadow_x,
-                         visualizer->config.now_playing_shadow_y,
-                         visualizer->config.now_playing_shadow_opacity, 0.96);
+          surface_cr, current_lyric, visualizer->config.lyrics_top_font, 8.0,
+          current_y, content_w, &visualizer->config.lyrics_top_text_color,
+          &visualizer->config.lyrics_top_outline_color,
+          visualizer->config.lyrics_top_outline_width,
+          &visualizer->config.lyrics_top_shadow_color,
+          visualizer->config.lyrics_top_shadow_x,
+          visualizer->config.lyrics_top_shadow_y,
+          visualizer->config.lyrics_top_shadow_opacity, 0.98);
+      if (visualizer->config.lyrics_two_lines && next_lyric &&
+          next_y + bottom_lyric_size <= section_h - 4.0)
+        draw_ellipsized_text(
+            surface_cr, next_lyric, visualizer->config.lyrics_bottom_font, 8.0,
+            next_y, content_w, &visualizer->config.lyrics_bottom_text_color,
+            &visualizer->config.lyrics_bottom_outline_color,
+            visualizer->config.lyrics_bottom_outline_width,
+            &visualizer->config.lyrics_bottom_shadow_color,
+            visualizer->config.lyrics_bottom_shadow_x,
+            visualizer->config.lyrics_bottom_shadow_y,
+            visualizer->config.lyrics_bottom_shadow_opacity, 0.62);
+    } else {
+      draw_ellipsized_text(
+          surface_cr, text, visualizer->config.now_playing_font, 8.0,
+          MAX(0, section_h - metadata_size) / 2.0, content_w,
+          &visualizer->config.now_playing_text_color,
+          &visualizer->config.now_playing_outline_color,
+          visualizer->config.now_playing_outline_width,
+          &visualizer->config.now_playing_shadow_color,
+          visualizer->config.now_playing_shadow_x,
+          visualizer->config.now_playing_shadow_y,
+          visualizer->config.now_playing_shadow_opacity, 0.96);
+    }
+
+    cairo_destroy(surface_cr);
   }
 
+  g_free(cache_key);
+  cairo_set_source_surface(cr, visualizer->now_playing_surface, 0.0,
+                           height - section_h);
+  cairo_paint(cr);
   g_free(text);
 }
 
@@ -619,6 +704,13 @@ static void queue_visualizer_draw(PwvizVisualizer *visualizer) {
     return;
 
   gtk_widget_queue_draw(visualizer->drawing_area);
+}
+
+static guint animation_interval_ms(PwvizVisualizer *visualizer) {
+  int target_fps = visualizer ? visualizer->config.target_fps : TARGET_FPS;
+
+  target_fps = CLAMP(target_fps, 15, 120);
+  return MAX(1, 1000 / target_fps);
 }
 
 static void update_input_region(PwvizVisualizer *visualizer) {
@@ -666,6 +758,16 @@ static void update_spectrum(PwvizVisualizer *visualizer) {
     visualizer->bars[i] = 0.0f;
 }
 
+static void update_peak_caps(PwvizVisualizer *visualizer, int bar_count) {
+  for (int i = 0; i < bar_count; i++)
+    update_peak_cap(visualizer, i);
+
+  for (int i = bar_count; i < PWVIZ_BAR_COUNT; i++) {
+    visualizer->peak_caps[i] = 0.0f;
+    visualizer->peak_holds[i] = 0;
+  }
+}
+
 static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
                           int height) {
   double visual_top = PWVIZ_SPECTRUM_TOP_PADDING;
@@ -682,8 +784,6 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
     return;
 
   for (int i = 0; i < bar_count; i++) {
-    update_peak_cap(visualizer, i);
-
     double bar_value = visualizer->config.analyzer_mode == PWVIZ_ANALYZER_PEAK
                            ? visualizer->peak_caps[i]
                            : visualizer->bars[i];
@@ -751,7 +851,6 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
   visualizer->width = width;
   visualizer->height = height;
   update_input_region(visualizer);
-  update_spectrum(visualizer);
 
   draw_background(visualizer, cr, width, height,
                   effective_bar_count(visualizer, width));
@@ -759,13 +858,29 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
   draw_now_playing(visualizer, cr, width, height);
 }
 
-static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
-                        gpointer data) {
-  (void)clock;
-  (void)data;
+static gboolean animation_frame_cb(gpointer data) {
+  PwvizVisualizer *visualizer = data;
 
-  gtk_widget_queue_draw(widget);
+  if (!visualizer || visualizer->destroying)
+    return G_SOURCE_REMOVE;
+
+  update_spectrum(visualizer);
+  update_peak_caps(visualizer, effective_bar_count(visualizer,
+                                                   visualizer->width));
+  queue_visualizer_draw(visualizer);
+
   return G_SOURCE_CONTINUE;
+}
+
+static void restart_animation_source(PwvizVisualizer *visualizer) {
+  if (!visualizer || visualizer->destroying)
+    return;
+
+  if (visualizer->animation_source)
+    g_source_remove(visualizer->animation_source);
+  visualizer->animation_source =
+      g_timeout_add(animation_interval_ms(visualizer), animation_frame_cb,
+                    visualizer);
 }
 
 typedef struct {
@@ -1060,6 +1175,13 @@ static void falloff_rate_changed_cb(GtkSpinButton *spin, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
   visualizer->config.falloff_rate = gtk_spin_button_get_value_as_int(spin);
+}
+
+static void target_fps_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.target_fps = gtk_spin_button_get_value_as_int(spin);
+  restart_animation_source(visualizer);
 }
 
 static void peak_change_rate_changed_cb(GtkSpinButton *spin, gpointer data) {
@@ -1679,6 +1801,7 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   GtkWidget *flash = gtk_check_button_new_with_label("Flash");
   GtkWidget *level_peak = gtk_check_button_new_with_label("Peak");
   GtkWidget *level_average = gtk_check_button_new_with_label("Average");
+  GtkWidget *target_fps = gtk_spin_button_new_with_range(15, 120, 1);
   GtkWidget *falloff = gtk_spin_button_new_with_range(0, 75, 1);
   GtkWidget *display_threshold =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 0.5, 0.01);
@@ -1688,6 +1811,7 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   GtkWidget *fft_scale =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 25.0, 0.1);
 
+  prepare_spin(target_fps);
   prepare_spin(falloff);
   prepare_scale(display_threshold, 2);
   prepare_scale(fft_envelope, 2);
@@ -1722,6 +1846,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                            ? level_peak
                            : level_average),
       TRUE);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(target_fps),
+                            visualizer->config.target_fps);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(falloff),
                             visualizer->config.falloff_rate);
   gtk_range_set_value(GTK_RANGE(display_threshold),
@@ -1742,6 +1868,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                    visualizer);
   g_signal_connect(level_average, "toggled", G_CALLBACK(level_mode_toggled_cb),
                    visualizer);
+  g_signal_connect(target_fps, "value-changed",
+                   G_CALLBACK(target_fps_changed_cb), visualizer);
   g_signal_connect(falloff, "value-changed",
                    G_CALLBACK(falloff_rate_changed_cb), visualizer);
   g_signal_connect(display_threshold, "value-changed",
@@ -1762,6 +1890,7 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   gtk_box_append(GTK_BOX(box), section_label("Output"));
   gtk_box_append(GTK_BOX(box), control_row("Display mode", mode_row));
   gtk_box_append(GTK_BOX(box), control_row("Bin calculation", level_row));
+  gtk_box_append(GTK_BOX(box), control_row("Target FPS", target_fps));
   gtk_box_append(GTK_BOX(box), control_row("Display threshold",
                                            display_threshold));
   gtk_box_append(GTK_BOX(box), control_row("Falloff", falloff));
@@ -2237,6 +2366,7 @@ static gboolean config_close_request_cb(GtkWindow *window, gpointer data) {
   visualizer->config = visualizer->config_snapshot;
   apply_window_geometry(visualizer);
   apply_layer_position(visualizer);
+  restart_animation_source(visualizer);
   queue_visualizer_draw(visualizer);
   visualizer->config_window = NULL;
   return FALSE;
@@ -2271,6 +2401,7 @@ static void config_cancel_clicked_cb(GtkButton *button, gpointer data) {
   visualizer->config = visualizer->config_snapshot;
   apply_window_geometry(visualizer);
   apply_layer_position(visualizer);
+  restart_animation_source(visualizer);
   queue_visualizer_draw(visualizer);
   gtk_window_destroy(visualizer->config_window);
 }
@@ -2513,6 +2644,8 @@ static void visualizer_init(PwvizVisualizer *visualizer,
 
   pwviz_app_config_load(&visualizer->config);
   visualizer->config_snapshot = visualizer->config;
+  visualizer->width = visualizer->config.window_width;
+  visualizer->height = visualizer->config.window_height;
   if (visualizer->config.now_playing_enabled) {
     pwviz_now_playing_refresh(&visualizer->now_playing);
     maybe_start_lyrics_fetch(visualizer);
@@ -2526,6 +2659,8 @@ static void visualizer_free(PwvizVisualizer *visualizer) {
     return;
 
   visualizer->destroying = TRUE;
+  if (visualizer->animation_source)
+    g_source_remove(visualizer->animation_source);
   if (visualizer->now_playing_source)
     g_source_remove(visualizer->now_playing_source);
   if (visualizer->lyrics_offset_message_source)
@@ -2540,6 +2675,8 @@ static void visualizer_free(PwvizVisualizer *visualizer) {
     poll_lyrics_results(visualizer);
     g_async_queue_unref(visualizer->lyrics_results);
   }
+  g_clear_pointer(&visualizer->now_playing_surface, cairo_surface_destroy);
+  g_clear_pointer(&visualizer->now_playing_cache_key, g_free);
   pwviz_lyrics_free(visualizer->lyrics);
   pwviz_global_shortcut_free(visualizer->global_shortcut);
   visualizer->drawing_area = NULL;
@@ -2594,8 +2731,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
       pwviz_global_shortcut_register(global_shortcut_cb, visualizer);
   visualizer->now_playing_source =
       g_timeout_add_seconds(1, now_playing_refresh_cb, visualizer);
-
-  gtk_widget_add_tick_callback(area, tick_cb, NULL, NULL);
+  restart_animation_source(visualizer);
   g_signal_connect_swapped(window, "map", G_CALLBACK(update_input_region),
                            visualizer);
   g_signal_connect_swapped(window, "destroy", G_CALLBACK(visualizer_free),

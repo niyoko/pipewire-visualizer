@@ -152,6 +152,7 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->x_margin = 0;
   config->y_margin = 0;
   config->now_playing_height = 112;
+  config->target_fps = 60;
   config->falloff_rate = 12;
   config->peak_change_rate = 80;
   config->peak_fall_per_frame = PWVIZ_PEAK_FALL_PER_FRAME;
@@ -234,6 +235,10 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
   if (has_key(key_file, "Analyzer", "auto_bar_count"))
     config->auto_bar_count =
         g_key_file_get_boolean(key_file, "Analyzer", "auto_bar_count", NULL);
+  if (has_key(key_file, "Analyzer", "target_fps"))
+    config->target_fps =
+        CLAMP(g_key_file_get_integer(key_file, "Analyzer", "target_fps", NULL),
+              15, 120);
   if (has_key(key_file, "Analyzer", "falloff_rate"))
     config->falloff_rate =
         CLAMP(g_key_file_get_integer(key_file, "Analyzer", "falloff_rate",
@@ -534,6 +539,8 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
                          config->bar_count);
   g_key_file_set_boolean(key_file, "Analyzer", "auto_bar_count",
                          config->auto_bar_count);
+  g_key_file_set_integer(key_file, "Analyzer", "target_fps",
+                         config->target_fps);
   g_key_file_set_integer(key_file, "Analyzer", "falloff_rate",
                          config->falloff_rate);
   g_key_file_set_integer(key_file, "Analyzer", "peak_change_rate",
