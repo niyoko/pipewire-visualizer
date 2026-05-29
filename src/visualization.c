@@ -647,8 +647,9 @@ static void install_transparent_window_css(void) {
   GtkCssProvider *provider = gtk_css_provider_new();
 
   gtk_css_provider_load_from_string(
-      provider, "window.pwviz-window, .pwviz-overlay { background: "
-                "transparent; }");
+      provider,
+      "window.pipewire-visualizer-window, .pipewire-visualizer-overlay { "
+      "background: transparent; }");
   gtk_style_context_add_provider_for_display(
       gdk_display_get_default(), GTK_STYLE_PROVIDER(provider),
       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -686,15 +687,15 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
   visualizer_init(visualizer, audio_buffer, window);
 
-  gtk_window_set_title(GTK_WINDOW(window), "PipeWire Visualizer");
-  gtk_widget_add_css_class(window, "pwviz-window");
+  gtk_window_set_title(GTK_WINDOW(window), "pipewire-visualizer");
+  gtk_widget_add_css_class(window, "pipewire-visualizer-window");
   gtk_window_set_default_size(GTK_WINDOW(window), visualizer->width,
                               visualizer->height);
   gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
   gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
 
   gtk_layer_init_for_window(GTK_WINDOW(window));
-  gtk_layer_set_namespace(GTK_WINDOW(window), "pwviz");
+  gtk_layer_set_namespace(GTK_WINDOW(window), "pipewire-visualizer");
   gtk_layer_set_layer(GTK_WINDOW(window), GTK_LAYER_SHELL_LAYER_OVERLAY);
   gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
   gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
@@ -706,7 +707,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
   install_transparent_window_css();
 
   GtkWidget *overlay = gtk_overlay_new();
-  gtk_widget_add_css_class(overlay, "pwviz-overlay");
+  gtk_widget_add_css_class(overlay, "pipewire-visualizer-overlay");
 
   GtkWidget *area = gtk_drawing_area_new();
   gtk_widget_set_can_target(area, FALSE);
@@ -736,7 +737,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
 int pwviz_visualization_run(PwvizAudioBuffer *audio_buffer, int argc,
                             char **argv) {
   GtkApplication *app =
-      gtk_application_new("local.pwviz", G_APPLICATION_DEFAULT_FLAGS);
+      gtk_application_new("local.pipewire_visualizer",
+                          G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(app, "activate", G_CALLBACK(activate), audio_buffer);
 
   int status = g_application_run(G_APPLICATION(app), argc, argv);

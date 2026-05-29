@@ -142,7 +142,8 @@ static void bind_shortcut(PwvizGlobalShortcut *shortcut) {
 
   g_variant_builder_init(&shortcut_properties, G_VARIANT_TYPE("a{sv}"));
   g_variant_builder_add(&shortcut_properties, "{sv}", "description",
-                        g_variant_new_string("Open pwviz settings"));
+                        g_variant_new_string(
+                            "Open pipewire-visualizer settings"));
   g_variant_builder_add(&shortcut_properties, "{sv}", "preferred_trigger",
                         g_variant_new_string("CTRL+SHIFT+ALT+F12"));
 

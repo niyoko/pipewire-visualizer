@@ -5,6 +5,9 @@ meson-info/
 meson-private/
 compile_commands.json
 
+# AUR metadata validation output
+aur/.SRCINFO.generated
+
 # Native build artifacts
 *.o
 *.a

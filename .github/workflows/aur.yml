@@ -1,0 +1,58 @@
+name: Publish AUR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install workflow dependencies
+        run: pacman -Syu --noconfirm git openssh
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare build user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "${GITHUB_WORKSPACE}"
+
+      - name: Validate .SRCINFO
+        run: |
+          runuser -u builder -- bash -lc \
+            "cd '${GITHUB_WORKSPACE}/aur' && makepkg --printsrcinfo > .SRCINFO.generated"
+          cd aur
+          diff -u .SRCINFO .SRCINFO.generated
+
+      - name: Configure AUR SSH
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ]; then
+            echo "::error::Missing AUR_SSH_PRIVATE_KEY repository secret"
+            exit 1
+          fi
+
+          install -dm700 -o builder -g builder /home/builder/.ssh
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > /home/builder/.ssh/aur
+          chmod 600 /home/builder/.ssh/aur
+          chown builder:builder /home/builder/.ssh/aur
+          runuser -u builder -- bash -lc \
+            'ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts'
+          cat > /home/builder/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+          EOF
+          chown builder:builder /home/builder/.ssh/config
+          chmod 600 /home/builder/.ssh/config
+
+      - name: Push AUR package metadata
+        run: |
+          runuser -u builder -- bash -lc \
+            "cd '${GITHUB_WORKSPACE}' && scripts/push-aur.sh"

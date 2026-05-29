@@ -5,7 +5,8 @@
 #include <glib.h>
 #include <string.h>
 
-#define CONFIG_DIR "pwviz"
+#define CONFIG_DIR "pipewire-visualizer"
+#define LEGACY_CONFIG_DIR "pwviz"
 #define CONFIG_FILE "config.ini"
 
 static void set_rgba(GdkRGBA *color, double red, double green, double blue,
@@ -19,6 +20,11 @@ static void set_rgba(GdkRGBA *color, double red, double green, double blue,
 static char *config_path(void) {
   return g_build_filename(g_get_user_config_dir(), CONFIG_DIR, CONFIG_FILE,
                           NULL);
+}
+
+static char *legacy_config_path(void) {
+  return g_build_filename(g_get_user_config_dir(), LEGACY_CONFIG_DIR,
+                          CONFIG_FILE, NULL);
 }
 
 static char *config_dir(void) {
@@ -118,8 +124,12 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
 
   pwviz_app_config_set_defaults(config);
 
-  if (!g_key_file_load_from_file(key_file, path, G_KEY_FILE_NONE, NULL))
-    goto done;
+  if (!g_key_file_load_from_file(key_file, path, G_KEY_FILE_NONE, NULL)) {
+    g_free(path);
+    path = legacy_config_path();
+    if (!g_key_file_load_from_file(key_file, path, G_KEY_FILE_NONE, NULL))
+      goto done;
+  }
 
   if (has_key(key_file, "Analyzer", "mode"))
     config->analyzer_mode =

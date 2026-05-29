@@ -1,4 +1,4 @@
-project('pwviz', 'c', default_options: ['warning_level=2'])
+project('pipewire-visualizer', 'c', default_options: ['warning_level=2'])
 
 cc = meson.get_compiler('c')
 m_dep = cc.find_library('m', required: true)
@@ -23,4 +23,4 @@ sources = [
   'src/visualization.c',
 ]
 
-executable('pwviz', sources, dependencies: deps)
+executable('pipewire-visualizer', sources, dependencies: deps, install: true)

@@ -49,11 +49,11 @@ static gpointer pipewire_thread(gpointer data) {
 
   sink->loop = pw_main_loop_new(NULL);
   sink->stream = pw_stream_new_simple(
-      pw_main_loop_get_loop(sink->loop), "pwviz-input",
+      pw_main_loop_get_loop(sink->loop), "pipewire-visualizer-input",
       pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY,
                         "Capture", PW_KEY_MEDIA_ROLE, "Music",
                         PW_KEY_STREAM_CAPTURE_SINK, "true", PW_KEY_NODE_NAME,
-                        "pwviz", NULL),
+                        "pipewire-visualizer", NULL),
       &stream_events, sink);
 
   uint8_t buffer[1024];
