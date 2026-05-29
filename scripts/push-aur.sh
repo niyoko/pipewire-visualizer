@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-pkgname="${AUR_PACKAGE:-pipewire-visualizer-git}"
+pkgname="${AUR_PACKAGE:-pipewire-visualizer}"
 remote="${AUR_REMOTE:-ssh://aur@aur.archlinux.org/${pkgname}.git}"
 commit_message="${AUR_COMMIT_MESSAGE:-Update ${pkgname}}"
 repo_root="$(git rev-parse --show-toplevel)"

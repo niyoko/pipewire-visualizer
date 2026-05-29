@@ -24,3 +24,24 @@ sources = [
 ]
 
 executable('pipewire-visualizer', sources, dependencies: deps, install: true)
+
+install_data(
+  'data/pipewire-visualizer.desktop',
+  install_dir: get_option('datadir') / 'applications',
+)
+
+install_data(
+  'data/pipewire-visualizer-autostart.desktop',
+  rename: 'pipewire-visualizer.desktop',
+  install_dir: get_option('sysconfdir') / 'xdg' / 'autostart',
+)
+
+install_data(
+  'README.md',
+  install_dir: get_option('datadir') / 'doc' / 'pipewire-visualizer',
+)
+
+install_data(
+  'README.md',
+  install_dir: get_option('datadir') / 'licenses' / 'pipewire-visualizer',
+)

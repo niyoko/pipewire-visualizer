@@ -1,9 +1,11 @@
 name: Publish AUR
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
 
 jobs:
   publish:
@@ -11,15 +13,75 @@ jobs:
     container: archlinux:base-devel
     steps:
       - name: Install workflow dependencies
-        run: pacman -Syu --noconfirm git openssh
+        run: pacman -Syu --noconfirm curl git jq openssh
 
-      - name: Check out repository
+      - name: Check out release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
       - name: Prepare build user
         run: |
           useradd -m builder
           chown -R builder:builder "${GITHUB_WORKSPACE}"
+
+      - name: Build release source asset
+        id: source
+        env:
+          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${RELEASE_TAG#v}"
+
+          if ! printf '%s\n' "${version}" \
+            | grep -Eq '^[0-9]{12}\.g[0-9a-fA-F]{7,}$'; then
+            echo "::error::Release tag must be yyyyMMddhhmm.gHASH or vyyyyMMddhhmm.gHASH"
+            exit 1
+          fi
+
+          asset="pipewire-visualizer-${version}.tar.gz"
+          git archive \
+            --format=tar.gz \
+            --prefix="pipewire-visualizer-${version}/" \
+            -o "${asset}" \
+            "${RELEASE_TAG}"
+          sha256="$(sha256sum "${asset}" | awk '{print $1}')"
+
+          assets_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets"
+          existing_id="$(curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${assets_url}" \
+            | jq -r --arg name "${asset}" '.[] | select(.name == $name) | .id' \
+            | head -n1)"
+
+          if [ -n "${existing_id}" ]; then
+            curl -fsSL \
+              -X DELETE \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${existing_id}"
+          fi
+
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @"${asset}" \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${asset}"
+
+          {
+            echo "version=${version}"
+            echo "sha256=${sha256}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Update AUR metadata
+        run: |
+          runuser -u builder -- bash -lc \
+            "cd '${GITHUB_WORKSPACE}' && scripts/update-aur-release.sh '${{ steps.source.outputs.version }}' '${{ github.event.release.tag_name }}' '${{ steps.source.outputs.sha256 }}'"
 
       - name: Validate .SRCINFO
         run: |

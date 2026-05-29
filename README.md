@@ -45,24 +45,24 @@ and `ninja`.
 
 ## Install From AUR
 
-On Arch Linux or an Arch-based distribution, install the live Git package from
-the AUR:
+On Arch Linux or an Arch-based distribution, install the release package from the
+AUR:
 
 ```sh
-paru -S pipewire-visualizer-git
+paru -S pipewire-visualizer
 ```
 
 or:
 
 ```sh
-yay -S pipewire-visualizer-git
+yay -S pipewire-visualizer
 ```
 
 You can also build it manually:
 
 ```sh
-git clone https://aur.archlinux.org/pipewire-visualizer-git.git
-cd pipewire-visualizer-git
+git clone https://aur.archlinux.org/pipewire-visualizer.git
+cd pipewire-visualizer
 makepkg -si
 ```
 
@@ -81,6 +81,20 @@ meson compile -C build
 
 If there is no visible activity, make sure PipeWire is running and that an audio
 stream is currently playing.
+
+## Autostart
+
+The packaged install includes an XDG autostart entry, so
+`pipewire-visualizer` starts automatically when you log in to a desktop session.
+
+For a local source build, install the desktop files manually:
+
+```sh
+mkdir -p ~/.local/share/applications ~/.config/autostart
+cp data/pipewire-visualizer.desktop ~/.local/share/applications/
+cp data/pipewire-visualizer-autostart.desktop \
+  ~/.config/autostart/pipewire-visualizer.desktop
+```
 
 ## Configuration
 

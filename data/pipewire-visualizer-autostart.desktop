@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PipeWire Visualizer
+Comment=Start PipeWire Visualizer on login
+Exec=pipewire-visualizer
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

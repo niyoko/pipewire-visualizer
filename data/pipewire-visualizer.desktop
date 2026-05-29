@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PipeWire Visualizer
+Comment=PipeWire spectrum visualizer overlay
+Exec=pipewire-visualizer
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupNotify=false

@@ -1,5 +1,5 @@
 # Maintainer: niyoko
-pkgname=pipewire-visualizer-git
+pkgname=pipewire-visualizer
 pkgver=197001010000.g0000000
 pkgrel=1
 pkgdesc='PipeWire Visualizer spectrum overlay for Wayland desktops'
@@ -7,22 +7,15 @@ arch=('x86_64')
 url='https://github.com/niyoko/pipewire-visualizer'
 license=('custom')
 depends=('gtk4' 'gtk4-layer-shell' 'pipewire' 'fftw')
-makedepends=('git' 'meson' 'ninja' 'pkgconf')
-provides=('pipewire-visualizer' 'pwviz')
-conflicts=('pipewire-visualizer' 'pwviz')
-source=('git+https://github.com/niyoko/pipewire-visualizer.git')
+makedepends=('meson' 'ninja' 'pkgconf')
+provides=('pwviz')
+conflicts=('pwviz')
+_tag='197001010000.g0000000'
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/niyoko/pipewire-visualizer/releases/download/${_tag}/${pkgname}-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
-pkgver() {
-  cd pipewire-visualizer
-
-  printf '%s.g%s' \
-    "$(git show -s --format=%cd --date=format:%Y%m%d%H%M HEAD)" \
-    "$(git rev-parse --short=7 HEAD)"
-}
-
 build() {
-  meson setup build pipewire-visualizer \
+  meson setup build "${pkgname}-${pkgver}" \
     --prefix=/usr \
     --buildtype=plain \
     --wrap-mode=nodownload
@@ -30,11 +23,6 @@ build() {
 }
 
 package() {
-  install -Dm755 build/pipewire-visualizer \
-    "$pkgdir/usr/bin/pipewire-visualizer"
+  meson install -C build --destdir "$pkgdir"
   ln -s pipewire-visualizer "$pkgdir/usr/bin/pwviz"
-  install -Dm644 pipewire-visualizer/README.md \
-    "$pkgdir/usr/share/doc/$pkgname/README.md"
-  install -Dm644 pipewire-visualizer/README.md \
-    "$pkgdir/usr/share/licenses/$pkgname/README.md"
 }
