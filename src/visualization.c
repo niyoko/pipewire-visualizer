@@ -2091,71 +2091,6 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
   return scroller;
 }
 
-static void profile_row_activated_cb(GtkListBox *box, GtkListBoxRow *row,
-                                     gpointer data) {
-  (void)box;
-
-  PwvizVisualizer *visualizer = data;
-  const char *profile = g_object_get_data(G_OBJECT(row), "profile");
-
-  if (profile) {
-    pwviz_app_config_apply_profile(&visualizer->config, profile);
-    queue_visualizer_draw(visualizer);
-  }
-}
-
-static GtkWidget *build_profiles_tab(PwvizVisualizer *visualizer) {
-  static const char *profiles[] = {
-      "Default Red & Yellow",
-      "Classic",
-      "Classic LED",
-      "Blue Flames",
-      "Blue on Grey",
-      "Flames",
-      "Lavender Pink Tips",
-      "LCD",
-      "Northern Lights",
-      "Purple Neon",
-  };
-  GtkWidget *box = tab_box();
-  GtkWidget *list = gtk_list_box_new();
-  GtkWidget *hint =
-      gtk_label_new("Select a profile to load its colours and analyzer "
-                    "settings. Use Save or OK to persist them.");
-
-  gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_SINGLE);
-  gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(list), TRUE);
-  gtk_widget_add_css_class(list, "boxed-list");
-  gtk_label_set_wrap(GTK_LABEL(hint), TRUE);
-  gtk_label_set_xalign(GTK_LABEL(hint), 0.0f);
-  gtk_widget_add_css_class(hint, "dim-label");
-
-  for (guint i = 0; i < G_N_ELEMENTS(profiles); i++) {
-    GtkWidget *row = gtk_list_box_row_new();
-    GtkWidget *label = gtk_label_new(profiles[i]);
-
-    gtk_widget_set_margin_top(label, 4);
-    gtk_widget_set_margin_bottom(label, 4);
-    gtk_widget_set_margin_start(label, 6);
-    gtk_widget_set_margin_end(label, 6);
-    gtk_widget_set_halign(label, GTK_ALIGN_START);
-    gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), label);
-    g_object_set_data(G_OBJECT(row), "profile", (gpointer)profiles[i]);
-    gtk_list_box_append(GTK_LIST_BOX(list), row);
-
-    if (g_strcmp0(visualizer->config.profile_name, profiles[i]) == 0)
-      gtk_list_box_select_row(GTK_LIST_BOX(list), GTK_LIST_BOX_ROW(row));
-  }
-
-  g_signal_connect(list, "row-activated", G_CALLBACK(profile_row_activated_cb),
-                   visualizer);
-
-  gtk_box_append(GTK_BOX(box), section_label("Saved Profiles"));
-  gtk_box_append(GTK_BOX(box), list);
-  gtk_box_append(GTK_BOX(box), hint);
-  return box;
-}
-
 static gboolean config_close_request_cb(GtkWindow *window, gpointer data) {
   (void)window;
 
@@ -2236,9 +2171,6 @@ static void show_config_window(PwvizVisualizer *visualizer) {
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
                            build_now_playing_tab(visualizer),
                            gtk_label_new("Now Playing"));
-  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
-                           build_profiles_tab(visualizer),
-                           gtk_label_new("Profiles"));
 
   gtk_widget_set_margin_top(root, 8);
   gtk_widget_set_margin_bottom(root, 8);

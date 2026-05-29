@@ -111,7 +111,6 @@ typedef struct {
   GdkRGBA lyrics_text_color;
   GdkRGBA lyrics_outline_color;
   GdkRGBA lyrics_shadow_color;
-  char profile_name[64];
   char now_playing_font[128];
   char lyrics_font[128];
 } PwvizAppConfig;
@@ -119,5 +118,3 @@ typedef struct {
 void pwviz_app_config_set_defaults(PwvizAppConfig *config);
 void pwviz_app_config_load(PwvizAppConfig *config);
 void pwviz_app_config_save(const PwvizAppConfig *config);
-void pwviz_app_config_apply_profile(PwvizAppConfig *config,
-                                    const char *profile_name);

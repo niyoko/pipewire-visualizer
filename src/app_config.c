@@ -133,22 +133,6 @@ static PwvizWindowAnchor anchor_from_string(const char *value) {
   return PWVIZ_ANCHOR_BOTTOM_RIGHT;
 }
 
-static void apply_classic_profile_settings(PwvizAppConfig *config,
-                                           int falloff_rate,
-                                           int peak_change_rate, int bar_width,
-                                           int x_spacing, int y_spacing,
-                                           int fft_scale) {
-  config->level_mode = PWVIZ_LEVEL_AVERAGE;
-  config->falloff_rate = falloff_rate;
-  config->peak_change_rate = peak_change_rate;
-  config->bar_width = bar_width;
-  config->x_spacing = x_spacing;
-  config->block_gap = y_spacing;
-  config->fft_equalize = TRUE;
-  config->fft_envelope = 0.2f;
-  config->fft_scale = fft_scale / 100.0f;
-}
-
 void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->analyzer_mode = PWVIZ_ANALYZER_BARS;
   config->level_mode = PWVIZ_LEVEL_AVERAGE;
@@ -203,68 +187,9 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   set_rgba(&config->lyrics_text_color, 1.0, 1.0, 1.0, 1.0);
   set_rgba(&config->lyrics_outline_color, 0.0, 0.0, 0.0, 1.0);
   set_rgba(&config->lyrics_shadow_color, 0.0, 0.0, 0.0, 1.0);
-  g_strlcpy(config->profile_name, "Default Red & Yellow",
-            sizeof(config->profile_name));
   g_strlcpy(config->now_playing_font, "Sans 13",
             sizeof(config->now_playing_font));
   g_strlcpy(config->lyrics_font, "Sans 12", sizeof(config->lyrics_font));
-}
-
-void pwviz_app_config_apply_profile(PwvizAppConfig *config,
-                                    const char *profile_name) {
-  if (g_strcmp0(profile_name, "Classic") == 0) {
-    apply_classic_profile_settings(config, 12, 80, 3, 1, 2, 200);
-    set_rgba(&config->low_color, 0.00, 0.25, 0.75, 1.0);
-    set_rgba(&config->high_color, 0.00, 1.00, 0.74, 1.0);
-    set_rgba(&config->peak_color, 0.42, 0.00, 0.79, 1.0);
-  } else if (g_strcmp0(profile_name, "Classic LED") == 0) {
-    apply_classic_profile_settings(config, 12, 100, 1, 1, 2, 220);
-    set_rgba(&config->low_color, 0.05, 0.20, 0.00, 1.0);
-    set_rgba(&config->high_color, 0.50, 1.00, 0.10, 1.0);
-    set_rgba(&config->peak_color, 0.90, 1.00, 0.30, 1.0);
-  } else if (g_strcmp0(profile_name, "Blue Flames") == 0) {
-    apply_classic_profile_settings(config, 12, 60, 2, 0, 1, 200);
-    set_rgba(&config->low_color, 0.00, 0.10, 0.45, 1.0);
-    set_rgba(&config->high_color, 0.00, 0.95, 1.00, 1.0);
-    set_rgba(&config->peak_color, 0.58, 0.70, 1.00, 1.0);
-  } else if (g_strcmp0(profile_name, "Blue on Grey") == 0) {
-    apply_classic_profile_settings(config, 12, 80, 3, 0, 1, 200);
-    set_rgba(&config->low_color, 0.08, 0.10, 0.15, 1.0);
-    set_rgba(&config->high_color, 0.30, 0.62, 1.00, 1.0);
-    set_rgba(&config->peak_color, 0.75, 0.84, 1.00, 1.0);
-  } else if (g_strcmp0(profile_name, "Flames") == 0) {
-    apply_classic_profile_settings(config, 14, 60, 2, 0, 1, 180);
-    set_rgba(&config->low_color, 0.40, 0.00, 0.00, 1.0);
-    set_rgba(&config->high_color, 1.00, 0.62, 0.00, 1.0);
-    set_rgba(&config->peak_color, 1.00, 0.95, 0.20, 1.0);
-  } else if (g_strcmp0(profile_name, "LCD") == 0) {
-    apply_classic_profile_settings(config, 12, 80, 3, 1, 1, 200);
-    set_rgba(&config->low_color, 0.14, 0.20, 0.12, 1.0);
-    set_rgba(&config->high_color, 0.56, 0.72, 0.42, 1.0);
-    set_rgba(&config->peak_color, 0.82, 0.92, 0.62, 1.0);
-  } else if (g_strcmp0(profile_name, "Northern Lights") == 0) {
-    apply_classic_profile_settings(config, 15, 50, 1, 0, 1, 190);
-    set_rgba(&config->low_color, 0.00, 0.12, 0.20, 1.0);
-    set_rgba(&config->high_color, 0.00, 0.96, 0.62, 1.0);
-    set_rgba(&config->peak_color, 0.62, 0.20, 1.00, 1.0);
-  } else if (g_strcmp0(profile_name, "Purple Neon") == 0) {
-    apply_classic_profile_settings(config, 13, 87, 2, 0, 1, 200);
-    set_rgba(&config->low_color, 0.24, 0.00, 0.42, 1.0);
-    set_rgba(&config->high_color, 0.78, 0.00, 1.00, 1.0);
-    set_rgba(&config->peak_color, 1.00, 0.45, 1.00, 1.0);
-  } else if (g_strcmp0(profile_name, "Lavender Pink Tips") == 0) {
-    apply_classic_profile_settings(config, 12, 80, 2, 0, 1, 200);
-    set_rgba(&config->low_color, 0.35, 0.18, 0.62, 1.0);
-    set_rgba(&config->high_color, 0.95, 0.62, 1.00, 1.0);
-    set_rgba(&config->peak_color, 1.00, 0.32, 0.72, 1.0);
-  } else {
-    apply_classic_profile_settings(config, 12, 80, 3, 1, 2, 200);
-    set_rgba(&config->low_color, 0.45, 0.0, 0.0, 1.0);
-    set_rgba(&config->high_color, 1.0, 0.86, 0.0, 1.0);
-    set_rgba(&config->peak_color, 1.0, 0.92, 0.20, 1.0);
-  }
-
-  g_strlcpy(config->profile_name, profile_name, sizeof(config->profile_name));
 }
 
 void pwviz_app_config_load(PwvizAppConfig *config) {
@@ -489,13 +414,6 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
   get_color(key_file, "Now Playing", "lyrics_shadow_color",
             &config->lyrics_shadow_color);
 
-  char *profile =
-      g_key_file_get_string(key_file, "Profiles", "current", NULL);
-  if (profile) {
-    g_strlcpy(config->profile_name, profile, sizeof(config->profile_name));
-    g_free(profile);
-  }
-
 done:
   g_free(path);
   g_key_file_unref(key_file);
@@ -607,9 +525,6 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
             &config->lyrics_outline_color);
   set_color(key_file, "Now Playing", "lyrics_shadow_color",
             &config->lyrics_shadow_color);
-
-  g_key_file_set_string(key_file, "Profiles", "current",
-                        config->profile_name);
 
   char *data = g_key_file_to_data(key_file, &length, NULL);
   g_mkdir_with_parents(dir, 0700);

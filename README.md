@@ -22,12 +22,12 @@ windows, and is fully click-through.
   peak motion controls.
 - Classic Spectrum Analyzer inspired visuals, including frequency bar styles,
   background modes, peak colour modes, peak motion modes, block geometry, alpha
-  controls, and built-in colour profiles.
+  controls, and configurable colours.
 - Wayland layer-shell overlay window with configurable anchor, X/Y margins,
   width, height, transparency, and click-through input behavior.
 - Configurable bar count or automatic bar count based on window width.
 - Native GTK settings window opened with `Ctrl+Shift+Alt+F12`, with organized
-  Analyzer, Layout, Style, Colour Factory, Now Playing, and Profiles pages.
+  Analyzer, Layout, Style, Colour Factory, and Now Playing pages.
 - MPRIS Now Playing metadata for player app, track title, artist, and album,
   with configurable displayed fields, strip height, background alpha, font,
   colour, and outline.
@@ -76,9 +76,7 @@ packaging, it finally became possible to make this version.
 - Classic visualizer setting categories: frequency bar style, background mode,
   peak colour behavior, and peak motion options.
 - Visual geometry conventions: bar width, horizontal spacing, vertical block
-  spacing, and profile-specific analyzer defaults.
-- Built-in colour profile names and colour palettes inspired by the original
-  Classic Spectrum Analyzer profiles.
+  spacing, and analyzer defaults.
 
 ## Requirements
 
@@ -157,7 +155,7 @@ is configured; spectrum bars and peaks render with alpha. Use
 Settings include analyzer mode, bar count, WACUP-style FFT equalization,
 envelope and scale, level mode, display threshold, falloff, window anchor,
 margins, size, bar width, spacing, block size, peak behavior, alpha, bar
-opacity, colours, Now Playing metadata, and built-in colour profiles.
+opacity, colours, and Now Playing metadata.
 
 The Style page exposes the Winamp-era categories shown by the
 original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,
