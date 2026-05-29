@@ -17,7 +17,7 @@ windows, and is fully click-through.
 
 - PipeWire audio capture for system playback from browsers, music players, and
   other desktop audio sources.
-- Real-time FFT spectrum analysis using FFTW, with WACUP-style equalization,
+- Real-time FFT spectrum analysis using FFTW, with Winamp Classic Visualizer-style equalization,
   envelope, scale, logarithmic binning, peak/average bar levels, falloff, and
   peak motion controls.
 - Classic Spectrum Analyzer inspired visuals, including frequency bar styles,
