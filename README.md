@@ -42,6 +42,10 @@ windows, and is fully click-through.
 - Separate native font, text colour, outline colour, and outline width settings
   for Now Playing metadata and lyrics.
 
+## Screen Recording
+
+[Screencast_20260529_174443.webm](https://github.com/user-attachments/assets/d239724e-61a8-48cd-b02f-f459405a11de)
+
 ## History
 
 This project started from a long-time love for
