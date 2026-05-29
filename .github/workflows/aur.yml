@@ -25,6 +25,9 @@ jobs:
         run: |
           useradd -m builder
           chown -R builder:builder "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          runuser -u builder -- git config --global --add safe.directory \
+            "${GITHUB_WORKSPACE}"
 
       - name: Build release source asset
         id: source
