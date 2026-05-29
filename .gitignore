@@ -1,0 +1,21 @@
+# Meson build output
+build/
+meson-logs/
+meson-info/
+meson-private/
+compile_commands.json
+
+# Native build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Editor and OS noise
+.cache/
+.DS_Store
+*~
+*.swp
+*.swo
