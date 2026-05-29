@@ -34,10 +34,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${RELEASE_TAG#v}"
+          version="${version//-/.}"
 
           if ! printf '%s\n' "${version}" \
-            | grep -Eq '^[0-9]{12}\.g[0-9a-fA-F]{7,}$'; then
-            echo "::error::Release tag must be yyyyMMddhhmm.gHASH or vyyyyMMddhhmm.gHASH"
+            | grep -Eq '^[A-Za-z0-9_.+]+$'; then
+            echo "::error::Release tag must convert to a valid Arch pkgver"
             exit 1
           fi
 

@@ -7,14 +7,15 @@ if [[ $# -ne 3 ]]; then
 fi
 
 pkgver="${1#v}"
+pkgver="${pkgver//-/.}"
 tag="$2"
 sha256="$3"
 repo_root="$(git rev-parse --show-toplevel)"
 pkgbuild="${repo_root}/aur/PKGBUILD"
 srcinfo="${repo_root}/aur/.SRCINFO"
 
-if [[ ! "${pkgver}" =~ ^[0-9]{12}\.g[0-9a-fA-F]{7,}$ ]]; then
-  echo "Invalid pkgver '${pkgver}', expected yyyyMMddhhmm.gHASH" >&2
+if [[ ! "${pkgver}" =~ ^[A-Za-z0-9_.+]+$ ]]; then
+  echo "Invalid pkgver '${pkgver}'" >&2
   exit 1
 fi
 
