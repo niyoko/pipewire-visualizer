@@ -87,6 +87,12 @@ typedef struct {
   double now_playing_alpha;
   double now_playing_outline_width;
   double lyrics_outline_width;
+  double now_playing_shadow_x;
+  double now_playing_shadow_y;
+  double now_playing_shadow_opacity;
+  double lyrics_shadow_x;
+  double lyrics_shadow_y;
+  double lyrics_shadow_opacity;
   gboolean fft_equalize;
   gboolean now_playing_enabled;
   gboolean now_playing_show_app;
@@ -101,8 +107,10 @@ typedef struct {
   GdkRGBA background_color;
   GdkRGBA now_playing_text_color;
   GdkRGBA now_playing_outline_color;
+  GdkRGBA now_playing_shadow_color;
   GdkRGBA lyrics_text_color;
   GdkRGBA lyrics_outline_color;
+  GdkRGBA lyrics_shadow_color;
   char profile_name[64];
   char now_playing_font[128];
   char lyrics_font[128];

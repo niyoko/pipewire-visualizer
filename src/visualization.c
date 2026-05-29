@@ -48,8 +48,10 @@ typedef enum {
   COLOR_BACKGROUND,
   COLOR_NOW_PLAYING_TEXT,
   COLOR_NOW_PLAYING_OUTLINE,
+  COLOR_NOW_PLAYING_SHADOW,
   COLOR_LYRICS_TEXT,
   COLOR_LYRICS_OUTLINE,
+  COLOR_LYRICS_SHADOW,
 } ColorTarget;
 
 enum {
@@ -83,13 +85,6 @@ typedef enum {
   FONT_NOW_PLAYING,
   FONT_LYRICS,
 } FontTarget;
-
-typedef struct {
-  PwvizVisualizer *visualizer;
-  FontTarget target;
-  GtkDropDown *family;
-  GtkSpinButton *size;
-} FontBinding;
 
 static void apply_layer_position(PwvizVisualizer *visualizer);
 static void apply_window_geometry(PwvizVisualizer *visualizer);
@@ -472,7 +467,10 @@ static void draw_ellipsized_text(cairo_t *cr, const char *text,
                                  int width,
                                  const GdkRGBA *text_color,
                                  const GdkRGBA *outline_color,
-                                 double outline_width, double alpha) {
+                                 double outline_width,
+                                 const GdkRGBA *shadow_color,
+                                 double shadow_x, double shadow_y,
+                                 double shadow_opacity, double alpha) {
   if (!text || text[0] == '\0')
     return;
 
@@ -484,7 +482,22 @@ static void draw_ellipsized_text(cairo_t *cr, const char *text,
   pango_layout_set_width(layout, MAX(1, width) * PANGO_SCALE);
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
   pango_layout_set_single_paragraph_mode(layout, TRUE);
-  pango_layout_set_text(layout, text, -1);
+  char *display_text = g_strdup(text);
+  for (char *p = display_text; *p; p++) {
+    if (*p == '\n' || *p == '\r' || *p == '\t')
+      *p = ' ';
+  }
+  pango_layout_set_text(layout, display_text, -1);
+
+  if (shadow_color && shadow_opacity > 0.0) {
+    cairo_move_to(cr, x + shadow_x, y + shadow_y);
+    pango_cairo_layout_path(cr, layout);
+    cairo_set_source_rgba(cr, shadow_color->red, shadow_color->green,
+                          shadow_color->blue,
+                          color_alpha(alpha, shadow_color->alpha) *
+                              CLAMP(shadow_opacity, 0.0, 1.0));
+    cairo_fill(cr);
+  }
 
   cairo_move_to(cr, x, y);
   pango_cairo_layout_path(cr, layout);
@@ -501,6 +514,7 @@ static void draw_ellipsized_text(cairo_t *cr, const char *text,
   cairo_fill(cr);
 
   pango_font_description_free(font);
+  g_free(display_text);
   g_object_unref(layout);
 }
 
@@ -542,25 +556,41 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
                          title_y, content_w,
                          &visualizer->config.now_playing_text_color,
                          &visualizer->config.now_playing_outline_color,
-                         visualizer->config.now_playing_outline_width, 0.78);
+                         visualizer->config.now_playing_outline_width,
+                         &visualizer->config.now_playing_shadow_color,
+                         visualizer->config.now_playing_shadow_x,
+                         visualizer->config.now_playing_shadow_y,
+                         visualizer->config.now_playing_shadow_opacity, 0.78);
     draw_ellipsized_text(cr, current_lyric, visualizer->config.lyrics_font, 8.0,
                          current_y, content_w,
                          &visualizer->config.lyrics_text_color,
                          &visualizer->config.lyrics_outline_color,
-                         visualizer->config.lyrics_outline_width, 0.98);
+                         visualizer->config.lyrics_outline_width,
+                         &visualizer->config.lyrics_shadow_color,
+                         visualizer->config.lyrics_shadow_x,
+                         visualizer->config.lyrics_shadow_y,
+                         visualizer->config.lyrics_shadow_opacity, 0.98);
     if (visualizer->config.lyrics_two_lines && next_lyric &&
         next_y + lyric_size <= y + section_h - 4.0)
       draw_ellipsized_text(cr, next_lyric, visualizer->config.lyrics_font, 8.0,
                            next_y, content_w,
                            &visualizer->config.lyrics_text_color,
                            &visualizer->config.lyrics_outline_color,
-                           visualizer->config.lyrics_outline_width, 0.62);
+                           visualizer->config.lyrics_outline_width,
+                           &visualizer->config.lyrics_shadow_color,
+                           visualizer->config.lyrics_shadow_x,
+                           visualizer->config.lyrics_shadow_y,
+                           visualizer->config.lyrics_shadow_opacity, 0.62);
   } else {
     draw_ellipsized_text(cr, text, visualizer->config.now_playing_font,
                          8.0, y + MAX(0, section_h - metadata_size) / 2.0,
                          content_w, &visualizer->config.now_playing_text_color,
                          &visualizer->config.now_playing_outline_color,
-                         visualizer->config.now_playing_outline_width, 0.96);
+                         visualizer->config.now_playing_outline_width,
+                         &visualizer->config.now_playing_shadow_color,
+                         visualizer->config.now_playing_shadow_x,
+                         visualizer->config.now_playing_shadow_y,
+                         visualizer->config.now_playing_shadow_opacity, 0.96);
   }
 
   g_free(text);
@@ -1122,6 +1152,53 @@ static void lyrics_outline_width_changed_cb(GtkSpinButton *spin, gpointer data) 
   queue_visualizer_draw(visualizer);
 }
 
+static void now_playing_shadow_x_changed_cb(GtkSpinButton *spin,
+                                            gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.now_playing_shadow_x = gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void now_playing_shadow_y_changed_cb(GtkSpinButton *spin,
+                                            gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.now_playing_shadow_y = gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void now_playing_shadow_opacity_changed_cb(GtkSpinButton *spin,
+                                                  gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.now_playing_shadow_opacity =
+      gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_shadow_x_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_shadow_x = gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_shadow_y_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_shadow_y = gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_shadow_opacity_changed_cb(GtkSpinButton *spin,
+                                             gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_shadow_opacity = gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
 static void now_playing_alpha_changed_cb(GtkRange *range, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
@@ -1186,34 +1263,44 @@ static void window_height_changed_cb(GtkSpinButton *spin, gpointer data) {
   apply_window_geometry(visualizer);
 }
 
-static void color_changed_cb(GtkColorDialogButton *button, gpointer data) {
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+
+static void color_changed_cb(GtkColorButton *button, gpointer data) {
   ColorBinding *binding = data;
-  const GdkRGBA *color = gtk_color_dialog_button_get_rgba(button);
+  GdkRGBA color;
+
+  gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(button), &color);
 
   switch (binding->target) {
   case COLOR_LOW:
-    binding->visualizer->config.low_color = *color;
+    binding->visualizer->config.low_color = color;
     break;
   case COLOR_HIGH:
-    binding->visualizer->config.high_color = *color;
+    binding->visualizer->config.high_color = color;
     break;
   case COLOR_PEAK:
-    binding->visualizer->config.peak_color = *color;
+    binding->visualizer->config.peak_color = color;
     break;
   case COLOR_BACKGROUND:
-    binding->visualizer->config.background_color = *color;
+    binding->visualizer->config.background_color = color;
     break;
   case COLOR_NOW_PLAYING_TEXT:
-    binding->visualizer->config.now_playing_text_color = *color;
+    binding->visualizer->config.now_playing_text_color = color;
     break;
   case COLOR_NOW_PLAYING_OUTLINE:
-    binding->visualizer->config.now_playing_outline_color = *color;
+    binding->visualizer->config.now_playing_outline_color = color;
+    break;
+  case COLOR_NOW_PLAYING_SHADOW:
+    binding->visualizer->config.now_playing_shadow_color = color;
     break;
   case COLOR_LYRICS_TEXT:
-    binding->visualizer->config.lyrics_text_color = *color;
+    binding->visualizer->config.lyrics_text_color = color;
     break;
   case COLOR_LYRICS_OUTLINE:
-    binding->visualizer->config.lyrics_outline_color = *color;
+    binding->visualizer->config.lyrics_outline_color = color;
+    break;
+  case COLOR_LYRICS_SHADOW:
+    binding->visualizer->config.lyrics_shadow_color = color;
     break;
   }
 
@@ -1227,20 +1314,20 @@ static void free_color_binding(gpointer data, GClosure *closure) {
 
 static GtkWidget *color_control(PwvizVisualizer *visualizer, ColorTarget target,
                                 const GdkRGBA *initial, const char *title) {
-  GtkColorDialog *dialog = gtk_color_dialog_new();
-  GtkWidget *button = gtk_color_dialog_button_new(dialog);
+  GtkWidget *button = gtk_color_button_new_with_rgba(initial);
   ColorBinding *binding = g_new0(ColorBinding, 1);
 
   binding->visualizer = visualizer;
   binding->target = target;
 
-  gtk_color_dialog_set_title(dialog, title);
-  gtk_color_dialog_set_with_alpha(dialog, TRUE);
-  gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(button), initial);
-  g_signal_connect_data(button, "notify::rgba", G_CALLBACK(color_changed_cb),
+  gtk_color_button_set_title(GTK_COLOR_BUTTON(button), title);
+  gtk_color_chooser_set_use_alpha(GTK_COLOR_CHOOSER(button), TRUE);
+  g_signal_connect_data(button, "color-set", G_CALLBACK(color_changed_cb),
                         binding, free_color_binding, 0);
   return button;
 }
+
+G_GNUC_END_IGNORE_DEPRECATIONS
 
 static gint string_pointer_compare(gconstpointer a, gconstpointer b) {
   return g_utf8_collate(*(const char *const *)a, *(const char *const *)b);
@@ -1272,14 +1359,14 @@ static const char *font_family_name(const char *font_desc) {
   return interned;
 }
 
-static GtkStringList *font_family_model(const char *initial_family,
-                                        guint *initial_position) {
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+
+static GtkListStore *font_family_completion_model(void) {
   PangoFontMap *font_map = pango_cairo_font_map_get_default();
   PangoFontFamily **families = NULL;
   int n_families = 0;
   GPtrArray *names = g_ptr_array_new();
-  GtkStringList *model = gtk_string_list_new(NULL);
-  gboolean found_initial = FALSE;
+  GtkListStore *model = gtk_list_store_new(1, G_TYPE_STRING);
 
   pango_font_map_list_families(font_map, &families, &n_families);
   for (int i = 0; i < n_families; i++)
@@ -1287,18 +1374,10 @@ static GtkStringList *font_family_model(const char *initial_family,
   g_ptr_array_sort(names, string_pointer_compare);
 
   for (guint i = 0; i < names->len; i++) {
-    const char *family = g_ptr_array_index(names, i);
+    GtkTreeIter iter;
 
-    if (!found_initial && g_strcmp0(family, initial_family) == 0) {
-      *initial_position = i;
-      found_initial = TRUE;
-    }
-    gtk_string_list_append(model, family);
-  }
-
-  if (!found_initial) {
-    *initial_position = names->len;
-    gtk_string_list_append(model, initial_family);
+    gtk_list_store_append(model, &iter);
+    gtk_list_store_set(model, &iter, 0, g_ptr_array_index(names, i), -1);
   }
 
   g_ptr_array_free(names, TRUE);
@@ -1306,44 +1385,164 @@ static GtkStringList *font_family_model(const char *initial_family,
   return model;
 }
 
-static void apply_font_selection(FontBinding *binding) {
-  if (!binding)
+static void append_font_style(GtkComboBoxText *styles,
+                              const PangoFontDescription *desc,
+                              const char *label) {
+  PangoFontDescription *copy = pango_font_description_copy(desc);
+  pango_font_description_unset_fields(copy, PANGO_FONT_MASK_SIZE);
+  char *id = pango_font_description_to_string(copy);
+
+  gtk_combo_box_text_append(styles, id, label);
+  g_free(id);
+  pango_font_description_free(copy);
+}
+
+static gboolean populate_font_styles(GtkComboBoxText *styles,
+                                     const char *family,
+                                     const PangoFontDescription *preferred) {
+  PangoFontMap *font_map = pango_cairo_font_map_get_default();
+  PangoFontFamily **families = NULL;
+  int n_families = 0;
+  int best_index = -1;
+  int count = 0;
+  PangoFontDescription *best = NULL;
+
+  gtk_combo_box_text_remove_all(styles);
+  pango_font_map_list_families(font_map, &families, &n_families);
+
+  for (int i = 0; i < n_families; i++) {
+    if (g_strcmp0(pango_font_family_get_name(families[i]), family) != 0)
+      continue;
+
+    PangoFontFace **faces = NULL;
+    int n_faces = 0;
+
+    pango_font_family_list_faces(families[i], &faces, &n_faces);
+    for (int j = 0; j < n_faces; j++) {
+      PangoFontDescription *desc = pango_font_face_describe(faces[j]);
+      const char *face_name = pango_font_face_get_face_name(faces[j]);
+
+      append_font_style(styles, desc, face_name);
+      if (preferred &&
+          pango_font_description_better_match(preferred, best, desc)) {
+        if (best)
+          pango_font_description_free(best);
+        best = desc;
+        best_index = count;
+      } else {
+        pango_font_description_free(desc);
+      }
+      count++;
+    }
+    g_free(faces);
+    break;
+  }
+
+  if (count == 0) {
+    PangoFontDescription *regular = pango_font_description_new();
+    PangoFontDescription *bold = pango_font_description_new();
+    PangoFontDescription *italic = pango_font_description_new();
+    PangoFontDescription *bold_italic = pango_font_description_new();
+
+    pango_font_description_set_family(regular, family);
+    pango_font_description_set_family(bold, family);
+    pango_font_description_set_weight(bold, PANGO_WEIGHT_BOLD);
+    pango_font_description_set_family(italic, family);
+    pango_font_description_set_style(italic, PANGO_STYLE_ITALIC);
+    pango_font_description_set_family(bold_italic, family);
+    pango_font_description_set_weight(bold_italic, PANGO_WEIGHT_BOLD);
+    pango_font_description_set_style(bold_italic, PANGO_STYLE_ITALIC);
+
+    append_font_style(styles, regular, "Regular");
+    append_font_style(styles, bold, "Bold");
+    append_font_style(styles, italic, "Italic");
+    append_font_style(styles, bold_italic, "Bold Italic");
+    best_index = 0;
+    count = 4;
+
+    pango_font_description_free(regular);
+    pango_font_description_free(bold);
+    pango_font_description_free(italic);
+    pango_font_description_free(bold_italic);
+  }
+
+  gtk_combo_box_set_active(GTK_COMBO_BOX(styles), best_index >= 0 ? best_index : 0);
+  if (best)
+    pango_font_description_free(best);
+  g_free(families);
+  return count > 0;
+}
+
+static void apply_font_selection(GtkWidget *box) {
+  if (!box)
     return;
 
-  GtkStringObject *selected =
-      gtk_drop_down_get_selected_item(GTK_DROP_DOWN(binding->family));
-  const char *family = selected ? gtk_string_object_get_string(selected) : "Sans";
-  PangoFontDescription *font = pango_font_description_new();
+  PwvizVisualizer *visualizer = g_object_get_data(G_OBJECT(box), "visualizer");
+  GtkEditable *family = g_object_get_data(G_OBJECT(box), "family");
+  GtkComboBox *style = g_object_get_data(G_OBJECT(box), "style");
+  GtkSpinButton *size = g_object_get_data(G_OBJECT(box), "size");
+  FontTarget target =
+      GPOINTER_TO_INT(g_object_get_data(G_OBJECT(box), "target"));
 
-  pango_font_description_set_family(font, family);
+  if (!visualizer || !family || !style || !size)
+    return;
+
+  const char *style_id = gtk_combo_box_get_active_id(style);
+  PangoFontDescription *font =
+      style_id ? pango_font_description_from_string(style_id)
+               : pango_font_description_new();
+  const char *family_text = gtk_editable_get_text(family);
+
+  pango_font_description_set_family(
+      font, family_text && family_text[0] != '\0' ? family_text : "Sans");
   pango_font_description_set_size(
-      font, gtk_spin_button_get_value_as_int(binding->size) * PANGO_SCALE);
+      font, gtk_spin_button_get_value_as_int(size) * PANGO_SCALE);
 
   char *font_string = pango_font_description_to_string(font);
 
-  switch (binding->target) {
+  switch (target) {
   case FONT_NOW_PLAYING:
-    g_strlcpy(binding->visualizer->config.now_playing_font, font_string,
-              sizeof(binding->visualizer->config.now_playing_font));
+    g_strlcpy(visualizer->config.now_playing_font, font_string,
+              sizeof(visualizer->config.now_playing_font));
     break;
   case FONT_LYRICS:
-    g_strlcpy(binding->visualizer->config.lyrics_font, font_string,
-              sizeof(binding->visualizer->config.lyrics_font));
+    g_strlcpy(visualizer->config.lyrics_font, font_string,
+              sizeof(visualizer->config.lyrics_font));
     break;
   }
 
   g_message("%s font: %s",
-            binding->target == FONT_NOW_PLAYING ? "Now playing" : "Lyrics",
-            font_string);
+            target == FONT_NOW_PLAYING ? "Now playing" : "Lyrics", font_string);
   g_free(font_string);
   pango_font_description_free(font);
-  queue_visualizer_draw(binding->visualizer);
+  queue_visualizer_draw(visualizer);
 }
 
-static void font_family_changed_cb(GtkDropDown *dropdown, GParamSpec *pspec,
-                                   gpointer data) {
-  (void)dropdown;
-  (void)pspec;
+static void font_family_changed_cb(GtkEditable *editable, gpointer data) {
+  (void)editable;
+
+  GtkWidget *box = data;
+  GtkComboBoxText *styles = g_object_get_data(G_OBJECT(box), "style");
+  const char *family = gtk_editable_get_text(editable);
+  const char *style_id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(styles));
+  PangoFontDescription *preferred =
+      style_id ? pango_font_description_from_string(style_id) : NULL;
+
+  g_object_set_data(G_OBJECT(box), "updating-font-style", GINT_TO_POINTER(TRUE));
+  populate_font_styles(styles, family && family[0] != '\0' ? family : "Sans",
+                       preferred);
+  g_object_set_data(G_OBJECT(box), "updating-font-style", NULL);
+
+  if (preferred)
+    pango_font_description_free(preferred);
+  apply_font_selection(data);
+}
+
+static void font_style_changed_cb(GtkComboBox *combo, gpointer data) {
+  (void)combo;
+
+  if (g_object_get_data(G_OBJECT(data), "updating-font-style"))
+    return;
   apply_font_selection(data);
 }
 
@@ -1352,46 +1551,54 @@ static void font_size_changed_cb(GtkSpinButton *spin, gpointer data) {
   apply_font_selection(data);
 }
 
-static void free_font_binding(gpointer data) {
-  g_free(data);
-}
-
 static GtkWidget *font_control(PwvizVisualizer *visualizer, FontTarget target,
                                const char *initial, const char *title) {
   const char *family = font_family_name(initial);
   int fallback_size = target == FONT_LYRICS ? 12 : 13;
-  guint initial_position = 0;
-  GtkStringList *families = font_family_model(family, &initial_position);
+  PangoFontDescription *initial_desc = pango_font_description_from_string(
+      initial && initial[0] != '\0' ? initial : "Sans 12");
+  GtkListStore *families = font_family_completion_model();
+  GtkEntryCompletion *completion = gtk_entry_completion_new();
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-  GtkWidget *dropdown = gtk_drop_down_new(G_LIST_MODEL(families), NULL);
+  GtkWidget *family_entry = gtk_entry_new();
+  GtkWidget *style = gtk_combo_box_text_new();
   GtkWidget *size = gtk_spin_button_new_with_range(8, 64, 1);
-  FontBinding *binding = g_new0(FontBinding, 1);
 
-  binding->visualizer = visualizer;
-  binding->target = target;
-  binding->family = GTK_DROP_DOWN(dropdown);
-  binding->size = GTK_SPIN_BUTTON(size);
-
-  gtk_drop_down_set_enable_search(GTK_DROP_DOWN(dropdown), TRUE);
-  gtk_drop_down_set_selected(GTK_DROP_DOWN(dropdown), initial_position);
+  gtk_entry_completion_set_model(completion, GTK_TREE_MODEL(families));
+  gtk_entry_completion_set_text_column(completion, 0);
+  gtk_entry_completion_set_inline_completion(completion, TRUE);
+  gtk_entry_completion_set_popup_completion(completion, TRUE);
+  gtk_entry_set_completion(GTK_ENTRY(family_entry), completion);
+  gtk_editable_set_text(GTK_EDITABLE(family_entry), family);
+  populate_font_styles(GTK_COMBO_BOX_TEXT(style), family, initial_desc);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(size),
                             font_point_size(initial, fallback_size));
   gtk_widget_set_tooltip_text(box, title);
-  gtk_widget_set_hexpand(dropdown, TRUE);
-  gtk_widget_set_halign(dropdown, GTK_ALIGN_FILL);
+  gtk_widget_set_hexpand(family_entry, TRUE);
+  gtk_widget_set_halign(family_entry, GTK_ALIGN_FILL);
+  gtk_widget_set_size_request(style, 120, -1);
   gtk_widget_set_size_request(size, 72, -1);
-  gtk_box_append(GTK_BOX(box), dropdown);
+  gtk_box_append(GTK_BOX(box), family_entry);
+  gtk_box_append(GTK_BOX(box), style);
   gtk_box_append(GTK_BOX(box), size);
 
-  g_object_set_data_full(G_OBJECT(box), "font-binding", binding,
-                         free_font_binding);
-  g_signal_connect(dropdown, "notify::selected",
-                   G_CALLBACK(font_family_changed_cb), binding);
+  g_object_set_data(G_OBJECT(box), "visualizer", visualizer);
+  g_object_set_data(G_OBJECT(box), "target", GINT_TO_POINTER(target));
+  g_object_set_data(G_OBJECT(box), "family", family_entry);
+  g_object_set_data(G_OBJECT(box), "style", style);
+  g_object_set_data(G_OBJECT(box), "size", size);
+  g_signal_connect(family_entry, "changed", G_CALLBACK(font_family_changed_cb),
+                   box);
+  g_signal_connect(style, "changed", G_CALLBACK(font_style_changed_cb), box);
   g_signal_connect(size, "value-changed", G_CALLBACK(font_size_changed_cb),
-                   binding);
+                   box);
+  pango_font_description_free(initial_desc);
+  g_object_unref(completion);
   g_object_unref(families);
   return box;
 }
+
+G_GNUC_END_IGNORE_DEPRECATIONS
 
 static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   GtkWidget *box = tab_box();
@@ -1719,12 +1926,34 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
   GtkWidget *outline_width = gtk_spin_button_new_with_range(0.0, 6.0, 0.1);
   GtkWidget *lyrics_outline_width =
       gtk_spin_button_new_with_range(0.0, 6.0, 0.1);
+  GtkWidget *shadow_x = gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
+  GtkWidget *shadow_y = gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
+  GtkWidget *shadow_opacity =
+      gtk_spin_button_new_with_range(0.0, 1.0, 0.05);
+  GtkWidget *lyrics_shadow_x =
+      gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
+  GtkWidget *lyrics_shadow_y =
+      gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
+  GtkWidget *lyrics_shadow_opacity =
+      gtk_spin_button_new_with_range(0.0, 1.0, 0.05);
   GtkWidget *alpha =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
 
   prepare_spin(height);
   prepare_spin(outline_width);
   prepare_spin(lyrics_outline_width);
+  prepare_spin(shadow_x);
+  prepare_spin(shadow_y);
+  prepare_spin(shadow_opacity);
+  prepare_spin(lyrics_shadow_x);
+  prepare_spin(lyrics_shadow_y);
+  prepare_spin(lyrics_shadow_opacity);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(shadow_x), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(shadow_y), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(shadow_opacity), 2);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_shadow_x), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_shadow_y), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_shadow_opacity), 2);
   prepare_scale(alpha, 2);
 
   gtk_check_button_set_active(GTK_CHECK_BUTTON(enabled),
@@ -1739,6 +1968,18 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
                             visualizer->config.now_playing_outline_width);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_outline_width),
                             visualizer->config.lyrics_outline_width);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(shadow_x),
+                            visualizer->config.now_playing_shadow_x);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(shadow_y),
+                            visualizer->config.now_playing_shadow_y);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(shadow_opacity),
+                            visualizer->config.now_playing_shadow_opacity);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_shadow_x),
+                            visualizer->config.lyrics_shadow_x);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_shadow_y),
+                            visualizer->config.lyrics_shadow_y);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_shadow_opacity),
+                            visualizer->config.lyrics_shadow_opacity);
   gtk_range_set_value(GTK_RANGE(alpha), visualizer->config.now_playing_alpha);
 
   gtk_box_append(GTK_BOX(fields),
@@ -1771,6 +2012,19 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
                    visualizer);
   g_signal_connect(lyrics_outline_width, "value-changed",
                    G_CALLBACK(lyrics_outline_width_changed_cb), visualizer);
+  g_signal_connect(shadow_x, "value-changed",
+                   G_CALLBACK(now_playing_shadow_x_changed_cb), visualizer);
+  g_signal_connect(shadow_y, "value-changed",
+                   G_CALLBACK(now_playing_shadow_y_changed_cb), visualizer);
+  g_signal_connect(shadow_opacity, "value-changed",
+                   G_CALLBACK(now_playing_shadow_opacity_changed_cb),
+                   visualizer);
+  g_signal_connect(lyrics_shadow_x, "value-changed",
+                   G_CALLBACK(lyrics_shadow_x_changed_cb), visualizer);
+  g_signal_connect(lyrics_shadow_y, "value-changed",
+                   G_CALLBACK(lyrics_shadow_y_changed_cb), visualizer);
+  g_signal_connect(lyrics_shadow_opacity, "value-changed",
+                   G_CALLBACK(lyrics_shadow_opacity_changed_cb), visualizer);
   g_signal_connect(alpha, "value-changed",
                    G_CALLBACK(now_playing_alpha_changed_cb), visualizer);
 
@@ -1790,6 +2044,17 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
           color_control(visualizer, COLOR_NOW_PLAYING_OUTLINE,
                         &visualizer->config.now_playing_outline_color,
                         "Now Playing Outline Colour")));
+  gtk_box_append(GTK_BOX(box),
+                 paired_control_row("Shadow offset", "X", shadow_x, "Y",
+                                    shadow_y));
+  gtk_box_append(
+      GTK_BOX(box),
+      paired_control_row("Shadow", "Colour",
+                         color_control(visualizer, COLOR_NOW_PLAYING_SHADOW,
+                                       &visualizer->config
+                                            .now_playing_shadow_color,
+                                       "Now Playing Shadow Colour"),
+                         "Opacity", shadow_opacity));
   gtk_box_append(GTK_BOX(box), section_label("Lyrics"));
   gtk_box_append(GTK_BOX(box), lyrics);
   gtk_box_append(GTK_BOX(box), two_lines);
@@ -1807,6 +2072,17 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
           color_control(visualizer, COLOR_LYRICS_OUTLINE,
                         &visualizer->config.lyrics_outline_color,
                         "Lyrics Outline Colour")));
+  gtk_box_append(GTK_BOX(box),
+                 paired_control_row("Shadow offset", "X", lyrics_shadow_x, "Y",
+                                    lyrics_shadow_y));
+  gtk_box_append(
+      GTK_BOX(box),
+      paired_control_row(
+          "Shadow", "Colour",
+          color_control(visualizer, COLOR_LYRICS_SHADOW,
+                        &visualizer->config.lyrics_shadow_color,
+                        "Lyrics Shadow Colour"),
+          "Opacity", lyrics_shadow_opacity));
   gtk_box_append(GTK_BOX(box), section_label("Bottom Section"));
   gtk_box_append(GTK_BOX(box),
                  control_row("Height", height));
@@ -2129,7 +2405,8 @@ static void install_transparent_window_css(void) {
   gtk_css_provider_load_from_string(
       provider,
       "window.pipewire-visualizer-window, .pipewire-visualizer-overlay { "
-      "background: transparent; }");
+      "background: transparent; } "
+      "scale.pwviz-scale slider { min-width: 18px; min-height: 18px; }");
   gtk_style_context_add_provider_for_display(
       gdk_display_get_default(), GTK_STYLE_PROVIDER(provider),
       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
