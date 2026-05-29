@@ -23,7 +23,7 @@ plug-in, with additional reference from the WACUP
 [vis_classic](https://github.com/WACUP/vis_classic) source release.
 
 For years I wanted a similar visualizer that works naturally on Linux with
-system audio from YouTube, Spotify, and other global music players instead of
+system audio from YouTube, Spotify, and other music players instead of
 being locked to one media player. I did not have the time to build it properly.
 In 2026, with AI coding agents advanced enough to help move quickly through
 desktop plumbing, PipeWire capture, FFT tuning, Wayland overlay behavior, and
@@ -101,8 +101,9 @@ cp data/pipewire-visualizer-autostart.desktop \
 The overlay window background and border are fully transparent; only the
 spectrum bars and peaks render with alpha. Use `Ctrl+Shift+Alt+F12` to open the
 settings window.
-Settings include analyzer mode, bar count, display threshold, block size, peak
-behavior, alpha, colours, and built-in colour profiles.
+Settings include analyzer mode, bar count, display threshold, window anchor,
+margins, size, block size, peak behavior, alpha, bar opacity, colours, and
+built-in colour profiles.
 
 Settings are saved to:
 

@@ -13,6 +13,7 @@
 typedef struct {
   GtkWindow *window;
   GtkWindow *config_window;
+  GtkWidget *drawing_area;
   PwvizAudioBuffer *audio_buffer;
   PwvizGlobalShortcut *global_shortcut;
   PwvizAppConfig config;
@@ -25,8 +26,6 @@ typedef struct {
   float bars[PWVIZ_BAR_COUNT];
   float peak_caps[PWVIZ_BAR_COUNT];
   int peak_holds[PWVIZ_BAR_COUNT];
-  int x;
-  int y;
   int width;
   int height;
 } PwvizVisualizer;
@@ -39,18 +38,43 @@ typedef enum {
 } ColorTarget;
 
 enum {
-  BACKGROUND_ALPHA = 0,
   INACTIVE_BAR_ALPHA = 0,
-  ACTIVE_BAR_ALPHA = 35,
-  FLASH_BAR_ALPHA = 35,
-  PEAK_ALPHA = 35,
   BORDER_ALPHA = 0,
 };
+
+typedef struct {
+  PwvizWindowAnchor anchor;
+  const char *label;
+} AnchorOption;
 
 typedef struct {
   PwvizVisualizer *visualizer;
   ColorTarget target;
 } ColorBinding;
+
+static void apply_layer_position(PwvizVisualizer *visualizer);
+static void apply_window_geometry(PwvizVisualizer *visualizer);
+
+static const AnchorOption ANCHOR_OPTIONS[] = {
+    {PWVIZ_ANCHOR_TOP_LEFT, "Top left"},
+    {PWVIZ_ANCHOR_TOP, "Top"},
+    {PWVIZ_ANCHOR_TOP_RIGHT, "Top right"},
+    {PWVIZ_ANCHOR_LEFT, "Left"},
+    {PWVIZ_ANCHOR_CENTER, "Center"},
+    {PWVIZ_ANCHOR_RIGHT, "Right"},
+    {PWVIZ_ANCHOR_BOTTOM_LEFT, "Bottom left"},
+    {PWVIZ_ANCHOR_BOTTOM, "Bottom"},
+    {PWVIZ_ANCHOR_BOTTOM_RIGHT, "Bottom right"},
+};
+
+static guint anchor_index_for_anchor(PwvizWindowAnchor anchor) {
+  for (guint i = 0; i < G_N_ELEMENTS(ANCHOR_OPTIONS); i++) {
+    if (ANCHOR_OPTIONS[i].anchor == anchor)
+      return i;
+  }
+
+  return G_N_ELEMENTS(ANCHOR_OPTIONS) - 1;
+}
 
 static double mix(double a, double b, double t) {
   return a + (b - a) * t;
@@ -58,6 +82,10 @@ static double mix(double a, double b, double t) {
 
 static double pct_alpha(int percent) {
   return percent / 100.0;
+}
+
+static double color_alpha(double config_alpha, double color_alpha) {
+  return CLAMP(config_alpha, 0.0, 1.0) * CLAMP(color_alpha, 0.0, 1.0);
 }
 
 static void queue_visualizer_draw(PwvizVisualizer *visualizer) {
@@ -153,12 +181,16 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
                          visualizer->config.high_color.green, level);
       double blue = mix(visualizer->config.low_color.blue,
                         visualizer->config.high_color.blue, level);
-      double alpha = lit ? pct_alpha(ACTIVE_BAR_ALPHA)
-                         : pct_alpha(INACTIVE_BAR_ALPHA);
+      double alpha =
+          lit ? color_alpha(visualizer->config.bar_alpha,
+                            mix(visualizer->config.low_color.alpha,
+                                visualizer->config.high_color.alpha, level))
+              : pct_alpha(INACTIVE_BAR_ALPHA);
 
       if (visualizer->config.analyzer_mode == PWVIZ_ANALYZER_FLASH &&
           visualizer->bars[i] > 0.75f)
-        alpha = pct_alpha(FLASH_BAR_ALPHA);
+        alpha = color_alpha(visualizer->config.bar_alpha,
+                            visualizer->config.high_color.alpha);
 
       cairo_set_source_rgba(cr, red, green, blue, alpha);
       cairo_rectangle(cr, x + 1.0, y, block_w, block_h);
@@ -177,7 +209,8 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
     cairo_set_source_rgba(cr, visualizer->config.peak_color.red,
                           visualizer->config.peak_color.green,
                           visualizer->config.peak_color.blue,
-                          pct_alpha(PEAK_ALPHA));
+                          color_alpha(visualizer->config.bar_alpha,
+                                      visualizer->config.peak_color.alpha));
     cairo_rectangle(cr, x + 1.0,
                     CLAMP(snapped_peak_y, visual_top, visual_bottom - block_h),
                     block_w, block_h);
@@ -198,7 +231,8 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
   cairo_set_source_rgba(cr, visualizer->config.background_color.red,
                         visualizer->config.background_color.green,
                         visualizer->config.background_color.blue,
-                        pct_alpha(BACKGROUND_ALPHA));
+                        color_alpha(visualizer->config.background_alpha,
+                                    visualizer->config.background_color.alpha));
   cairo_paint(cr);
   draw_spectrum(visualizer, cr, width, height);
 }
@@ -217,25 +251,66 @@ static void save_current_config(PwvizVisualizer *visualizer) {
   visualizer->config_snapshot = visualizer->config;
 }
 
+static GtkWidget *section_label(const char *label) {
+  GtkWidget *text = gtk_label_new(label);
+
+  gtk_widget_add_css_class(text, "heading");
+  gtk_widget_set_halign(text, GTK_ALIGN_START);
+  gtk_widget_set_margin_top(text, 6);
+  gtk_widget_set_margin_bottom(text, 2);
+  return text;
+}
+
+static void prepare_scale(GtkWidget *scale, int digits) {
+  gtk_scale_set_digits(GTK_SCALE(scale), digits);
+  gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+  gtk_scale_set_value_pos(GTK_SCALE(scale), GTK_POS_RIGHT);
+}
+
+static void prepare_spin(GtkWidget *spin) {
+  gtk_widget_set_hexpand(spin, TRUE);
+  gtk_widget_set_halign(spin, GTK_ALIGN_FILL);
+}
+
 static GtkWidget *control_row(const char *label, GtkWidget *control) {
   GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *text = gtk_label_new(label);
 
   gtk_widget_set_hexpand(control, TRUE);
+  gtk_widget_set_valign(control, GTK_ALIGN_CENTER);
   gtk_widget_set_halign(text, GTK_ALIGN_START);
-  gtk_widget_set_hexpand(text, TRUE);
+  gtk_widget_set_valign(text, GTK_ALIGN_CENTER);
+  gtk_label_set_xalign(GTK_LABEL(text), 0.0f);
+  gtk_label_set_width_chars(GTK_LABEL(text), 18);
   gtk_box_append(GTK_BOX(row), text);
   gtk_box_append(GTK_BOX(row), control);
   return row;
 }
 
+static GtkWidget *paired_control_row(const char *label, const char *first_label,
+                                     GtkWidget *first,
+                                     const char *second_label,
+                                     GtkWidget *second) {
+  GtkWidget *controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *first_text = gtk_label_new(first_label);
+  GtkWidget *second_text = gtk_label_new(second_label);
+
+  gtk_widget_set_hexpand(first, TRUE);
+  gtk_widget_set_hexpand(second, TRUE);
+  gtk_box_append(GTK_BOX(controls), first_text);
+  gtk_box_append(GTK_BOX(controls), first);
+  gtk_box_append(GTK_BOX(controls), second_text);
+  gtk_box_append(GTK_BOX(controls), second);
+  return control_row(label, controls);
+}
+
 static GtkWidget *tab_box(void) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
 
-  gtk_widget_set_margin_top(box, 12);
-  gtk_widget_set_margin_bottom(box, 12);
-  gtk_widget_set_margin_start(box, 12);
-  gtk_widget_set_margin_end(box, 12);
+  gtk_widget_set_margin_top(box, 14);
+  gtk_widget_set_margin_bottom(box, 14);
+  gtk_widget_set_margin_start(box, 16);
+  gtk_widget_set_margin_end(box, 16);
   return box;
 }
 
@@ -289,10 +364,17 @@ static void display_threshold_changed_cb(GtkRange *range, gpointer data) {
   queue_visualizer_draw(visualizer);
 }
 
-static void alpha_changed_cb(GtkRange *range, gpointer data) {
+static void background_alpha_changed_cb(GtkRange *range, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
   visualizer->config.background_alpha = gtk_range_get_value(range);
+  queue_visualizer_draw(visualizer);
+}
+
+static void bar_alpha_changed_cb(GtkRange *range, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.bar_alpha = gtk_range_get_value(range);
   queue_visualizer_draw(visualizer);
 }
 
@@ -301,6 +383,48 @@ static void show_border_toggled_cb(GtkCheckButton *button, gpointer data) {
 
   visualizer->config.show_border = gtk_check_button_get_active(button);
   queue_visualizer_draw(visualizer);
+}
+
+static void anchor_selected_cb(GtkDropDown *dropdown, GParamSpec *pspec,
+                               gpointer data) {
+  (void)pspec;
+
+  PwvizVisualizer *visualizer = data;
+  guint selected = gtk_drop_down_get_selected(dropdown);
+
+  if (selected >= G_N_ELEMENTS(ANCHOR_OPTIONS))
+    return;
+
+  visualizer->config.window_anchor = ANCHOR_OPTIONS[selected].anchor;
+  apply_layer_position(visualizer);
+}
+
+static void x_margin_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.x_margin = gtk_spin_button_get_value_as_int(spin);
+  apply_layer_position(visualizer);
+}
+
+static void y_margin_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.y_margin = gtk_spin_button_get_value_as_int(spin);
+  apply_layer_position(visualizer);
+}
+
+static void window_width_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.window_width = gtk_spin_button_get_value_as_int(spin);
+  apply_window_geometry(visualizer);
+}
+
+static void window_height_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.window_height = gtk_spin_button_get_value_as_int(spin);
+  apply_window_geometry(visualizer);
 }
 
 static void color_changed_cb(GtkColorDialogButton *button, gpointer data) {
@@ -349,6 +473,7 @@ static GtkWidget *color_control(PwvizVisualizer *visualizer, ColorTarget target,
 
 static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   GtkWidget *box = tab_box();
+  GtkWidget *mode_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
   GtkWidget *bars = gtk_check_button_new_with_label("Bars");
   GtkWidget *peak = gtk_check_button_new_with_label("Peak");
   GtkWidget *flash = gtk_check_button_new_with_label("Flash");
@@ -358,6 +483,11 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.001, 0.08, 0.001);
   GtkWidget *display_threshold =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 0.5, 0.01);
+
+  prepare_spin(bar_count);
+  prepare_spin(peak_hold);
+  prepare_scale(peak_fall, 3);
+  prepare_scale(display_threshold, 2);
 
   gtk_check_button_set_group(GTK_CHECK_BUTTON(peak), GTK_CHECK_BUTTON(bars));
   gtk_check_button_set_group(GTK_CHECK_BUTTON(flash), GTK_CHECK_BUTTON(bars));
@@ -401,14 +531,71 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   g_signal_connect(display_threshold, "value-changed",
                    G_CALLBACK(display_threshold_changed_cb), visualizer);
 
-  gtk_box_append(GTK_BOX(box), bars);
-  gtk_box_append(GTK_BOX(box), peak);
-  gtk_box_append(GTK_BOX(box), flash);
+  gtk_box_append(GTK_BOX(mode_row), bars);
+  gtk_box_append(GTK_BOX(mode_row), peak);
+  gtk_box_append(GTK_BOX(mode_row), flash);
+
+  gtk_box_append(GTK_BOX(box), section_label("Analyzer"));
+  gtk_box_append(GTK_BOX(box), control_row("Mode", mode_row));
   gtk_box_append(GTK_BOX(box), control_row("Bars", bar_count));
+  gtk_box_append(GTK_BOX(box), control_row("Display threshold",
+                                           display_threshold));
+  gtk_box_append(GTK_BOX(box), section_label("Peak"));
   gtk_box_append(GTK_BOX(box), control_row("Peak hold", peak_hold));
   gtk_box_append(GTK_BOX(box), control_row("Peak fall speed", peak_fall));
+  return box;
+}
+
+static GtkWidget *build_layout_tab(PwvizVisualizer *visualizer) {
+  const char *anchor_labels[G_N_ELEMENTS(ANCHOR_OPTIONS) + 1];
+  GtkWidget *box = tab_box();
+  GtkWidget *x_margin = gtk_spin_button_new_with_range(0, 10000, 1);
+  GtkWidget *y_margin = gtk_spin_button_new_with_range(0, 10000, 1);
+  GtkWidget *width =
+      gtk_spin_button_new_with_range(PWVIZ_MIN_WINDOW_WIDTH, 10000, 1);
+  GtkWidget *height =
+      gtk_spin_button_new_with_range(PWVIZ_MIN_WINDOW_HEIGHT, 10000, 1);
+
+  prepare_spin(x_margin);
+  prepare_spin(y_margin);
+  prepare_spin(width);
+  prepare_spin(height);
+
+  for (guint i = 0; i < G_N_ELEMENTS(ANCHOR_OPTIONS); i++)
+    anchor_labels[i] = ANCHOR_OPTIONS[i].label;
+  anchor_labels[G_N_ELEMENTS(ANCHOR_OPTIONS)] = NULL;
+
+  GtkWidget *anchor = gtk_drop_down_new_from_strings(anchor_labels);
+  gtk_drop_down_set_selected(
+      GTK_DROP_DOWN(anchor),
+      anchor_index_for_anchor(visualizer->config.window_anchor));
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(x_margin),
+                            visualizer->config.x_margin);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(y_margin),
+                            visualizer->config.y_margin);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(width),
+                            visualizer->config.window_width);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(height),
+                            visualizer->config.window_height);
+
+  g_signal_connect(anchor, "notify::selected", G_CALLBACK(anchor_selected_cb),
+                   visualizer);
+  g_signal_connect(x_margin, "value-changed",
+                   G_CALLBACK(x_margin_changed_cb), visualizer);
+  g_signal_connect(y_margin, "value-changed",
+                   G_CALLBACK(y_margin_changed_cb), visualizer);
+  g_signal_connect(width, "value-changed",
+                   G_CALLBACK(window_width_changed_cb), visualizer);
+  g_signal_connect(height, "value-changed",
+                   G_CALLBACK(window_height_changed_cb), visualizer);
+
+  gtk_box_append(GTK_BOX(box), section_label("Position"));
+  gtk_box_append(GTK_BOX(box), control_row("Anchor", anchor));
   gtk_box_append(GTK_BOX(box),
-                 control_row("Display threshold", display_threshold));
+                 paired_control_row("Margins", "X", x_margin, "Y", y_margin));
+  gtk_box_append(GTK_BOX(box), section_label("Size"));
+  gtk_box_append(GTK_BOX(box),
+                 paired_control_row("Window", "W", width, "H", height));
   return box;
 }
 
@@ -418,13 +605,21 @@ static GtkWidget *build_style_tab(PwvizVisualizer *visualizer) {
   GtkWidget *block_gap = gtk_spin_button_new_with_range(0, 12, 1);
   GtkWidget *alpha =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
+  GtkWidget *bar_alpha =
+      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
   GtkWidget *border = gtk_check_button_new_with_label("Show analyzer border");
+
+  prepare_spin(block_height);
+  prepare_spin(block_gap);
+  prepare_scale(alpha, 2);
+  prepare_scale(bar_alpha, 2);
 
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(block_height),
                             visualizer->config.block_height);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(block_gap),
                             visualizer->config.block_gap);
   gtk_range_set_value(GTK_RANGE(alpha), visualizer->config.background_alpha);
+  gtk_range_set_value(GTK_RANGE(bar_alpha), visualizer->config.bar_alpha);
   gtk_check_button_set_active(GTK_CHECK_BUTTON(border),
                               visualizer->config.show_border);
 
@@ -432,14 +627,20 @@ static GtkWidget *build_style_tab(PwvizVisualizer *visualizer) {
                    G_CALLBACK(block_height_changed_cb), visualizer);
   g_signal_connect(block_gap, "value-changed", G_CALLBACK(block_gap_changed_cb),
                    visualizer);
-  g_signal_connect(alpha, "value-changed", G_CALLBACK(alpha_changed_cb),
-                   visualizer);
+  g_signal_connect(alpha, "value-changed",
+                   G_CALLBACK(background_alpha_changed_cb), visualizer);
+  g_signal_connect(bar_alpha, "value-changed",
+                   G_CALLBACK(bar_alpha_changed_cb), visualizer);
   g_signal_connect(border, "toggled", G_CALLBACK(show_border_toggled_cb),
                    visualizer);
 
-  gtk_box_append(GTK_BOX(box), control_row("Block height", block_height));
-  gtk_box_append(GTK_BOX(box), control_row("Block gap", block_gap));
+  gtk_box_append(GTK_BOX(box), section_label("Blocks"));
+  gtk_box_append(GTK_BOX(box),
+                 paired_control_row("Shape", "Height", block_height, "Gap",
+                                    block_gap));
+  gtk_box_append(GTK_BOX(box), section_label("Transparency"));
   gtk_box_append(GTK_BOX(box), control_row("Background alpha", alpha));
+  gtk_box_append(GTK_BOX(box), control_row("Bar opacity", bar_alpha));
   gtk_box_append(GTK_BOX(box), border);
   return box;
 }
@@ -447,6 +648,7 @@ static GtkWidget *build_style_tab(PwvizVisualizer *visualizer) {
 static GtkWidget *build_colour_tab(PwvizVisualizer *visualizer) {
   GtkWidget *box = tab_box();
 
+  gtk_box_append(GTK_BOX(box), section_label("Bars"));
   gtk_box_append(GTK_BOX(box),
                  control_row("Low colour",
                              color_control(visualizer, COLOR_LOW,
@@ -462,6 +664,7 @@ static GtkWidget *build_colour_tab(PwvizVisualizer *visualizer) {
                              color_control(visualizer, COLOR_PEAK,
                                            &visualizer->config.peak_color,
                                            "Peak Colour")));
+  gtk_box_append(GTK_BOX(box), section_label("Window"));
   gtk_box_append(GTK_BOX(box),
                  control_row("Background",
                              color_control(visualizer, COLOR_BACKGROUND,
@@ -498,9 +701,16 @@ static GtkWidget *build_profiles_tab(PwvizVisualizer *visualizer) {
   };
   GtkWidget *box = tab_box();
   GtkWidget *list = gtk_list_box_new();
+  GtkWidget *hint =
+      gtk_label_new("Select a profile to load its colours. Use Save or OK to "
+                    "persist the current settings.");
 
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_SINGLE);
   gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(list), TRUE);
+  gtk_widget_add_css_class(list, "boxed-list");
+  gtk_label_set_wrap(GTK_LABEL(hint), TRUE);
+  gtk_label_set_xalign(GTK_LABEL(hint), 0.0f);
+  gtk_widget_add_css_class(hint, "dim-label");
 
   for (guint i = 0; i < G_N_ELEMENTS(profiles); i++) {
     GtkWidget *row = gtk_list_box_row_new();
@@ -522,11 +732,9 @@ static GtkWidget *build_profiles_tab(PwvizVisualizer *visualizer) {
   g_signal_connect(list, "row-activated", G_CALLBACK(profile_row_activated_cb),
                    visualizer);
 
-  gtk_box_append(GTK_BOX(box), gtk_label_new("Saved Profiles"));
+  gtk_box_append(GTK_BOX(box), section_label("Saved Profiles"));
   gtk_box_append(GTK_BOX(box), list);
-  gtk_box_append(GTK_BOX(box),
-                 gtk_label_new("Select a profile to load its colours. Use Save "
-                               "or OK to persist the current settings."));
+  gtk_box_append(GTK_BOX(box), hint);
   return box;
 }
 
@@ -536,6 +744,8 @@ static gboolean config_close_request_cb(GtkWindow *window, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
   visualizer->config = visualizer->config_snapshot;
+  apply_window_geometry(visualizer);
+  apply_layer_position(visualizer);
   queue_visualizer_draw(visualizer);
   visualizer->config_window = NULL;
   return FALSE;
@@ -568,6 +778,8 @@ static void config_cancel_clicked_cb(GtkButton *button, gpointer data) {
 
   PwvizVisualizer *visualizer = data;
   visualizer->config = visualizer->config_snapshot;
+  apply_window_geometry(visualizer);
+  apply_layer_position(visualizer);
   queue_visualizer_draw(visualizer);
   gtk_window_destroy(visualizer->config_window);
 }
@@ -591,12 +803,14 @@ static void show_config_window(PwvizVisualizer *visualizer) {
   visualizer->config_window = GTK_WINDOW(window);
 
   gtk_window_set_title(GTK_WINDOW(window), "Classic Spectrum Analyzer Settings");
-  gtk_window_set_default_size(GTK_WINDOW(window), 460, 360);
+  gtk_window_set_default_size(GTK_WINDOW(window), 520, 400);
   gtk_window_set_transient_for(GTK_WINDOW(window), visualizer->window);
 
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
                            build_analyzer_tab(visualizer),
                            gtk_label_new("Analyzer"));
+  gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_layout_tab(visualizer),
+                           gtk_label_new("Layout"));
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_style_tab(visualizer),
                            gtk_label_new("Style"));
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_colour_tab(visualizer),
@@ -657,10 +871,73 @@ static gboolean key_pressed_cb(GtkEventControllerKey *controller, guint keyval,
 }
 
 static void apply_layer_position(PwvizVisualizer *visualizer) {
-  gtk_layer_set_margin(visualizer->window, GTK_LAYER_SHELL_EDGE_RIGHT,
-                       visualizer->x);
+  gboolean top = FALSE;
+  gboolean bottom = FALSE;
+  gboolean left = FALSE;
+  gboolean right = FALSE;
+
+  switch (visualizer->config.window_anchor) {
+  case PWVIZ_ANCHOR_TOP_LEFT:
+    top = TRUE;
+    left = TRUE;
+    break;
+  case PWVIZ_ANCHOR_TOP:
+    top = TRUE;
+    break;
+  case PWVIZ_ANCHOR_TOP_RIGHT:
+    top = TRUE;
+    right = TRUE;
+    break;
+  case PWVIZ_ANCHOR_LEFT:
+    left = TRUE;
+    break;
+  case PWVIZ_ANCHOR_CENTER:
+    break;
+  case PWVIZ_ANCHOR_RIGHT:
+    right = TRUE;
+    break;
+  case PWVIZ_ANCHOR_BOTTOM_LEFT:
+    bottom = TRUE;
+    left = TRUE;
+    break;
+  case PWVIZ_ANCHOR_BOTTOM:
+    bottom = TRUE;
+    break;
+  case PWVIZ_ANCHOR_BOTTOM_RIGHT:
+    bottom = TRUE;
+    right = TRUE;
+    break;
+  }
+
+  gtk_layer_set_anchor(visualizer->window, GTK_LAYER_SHELL_EDGE_TOP, top);
+  gtk_layer_set_anchor(visualizer->window, GTK_LAYER_SHELL_EDGE_BOTTOM,
+                       bottom);
+  gtk_layer_set_anchor(visualizer->window, GTK_LAYER_SHELL_EDGE_LEFT, left);
+  gtk_layer_set_anchor(visualizer->window, GTK_LAYER_SHELL_EDGE_RIGHT, right);
+
+  gtk_layer_set_margin(visualizer->window, GTK_LAYER_SHELL_EDGE_TOP,
+                       top ? visualizer->config.y_margin : 0);
   gtk_layer_set_margin(visualizer->window, GTK_LAYER_SHELL_EDGE_BOTTOM,
-                       visualizer->y);
+                       bottom ? visualizer->config.y_margin : 0);
+  gtk_layer_set_margin(visualizer->window, GTK_LAYER_SHELL_EDGE_LEFT,
+                       left ? visualizer->config.x_margin : 0);
+  gtk_layer_set_margin(visualizer->window, GTK_LAYER_SHELL_EDGE_RIGHT,
+                       right ? visualizer->config.x_margin : 0);
+}
+
+static void apply_window_geometry(PwvizVisualizer *visualizer) {
+  gtk_window_set_default_size(GTK_WINDOW(visualizer->window),
+                              visualizer->config.window_width,
+                              visualizer->config.window_height);
+
+  if (visualizer->drawing_area) {
+    gtk_drawing_area_set_content_width(
+        GTK_DRAWING_AREA(visualizer->drawing_area),
+        visualizer->config.window_width);
+    gtk_drawing_area_set_content_height(
+        GTK_DRAWING_AREA(visualizer->drawing_area),
+        visualizer->config.window_height);
+  }
 }
 
 static void install_transparent_window_css(void) {
@@ -681,10 +958,6 @@ static void visualizer_init(PwvizVisualizer *visualizer,
                             GtkWidget *window) {
   visualizer->window = GTK_WINDOW(window);
   visualizer->audio_buffer = audio_buffer;
-  visualizer->width = 900;
-  visualizer->height = 240;
-  visualizer->x = 0;
-  visualizer->y = 0;
 
   pwviz_app_config_load(&visualizer->config);
   visualizer->config_snapshot = visualizer->config;
@@ -709,16 +982,15 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
   gtk_window_set_title(GTK_WINDOW(window), "pipewire-visualizer");
   gtk_widget_add_css_class(window, "pipewire-visualizer-window");
-  gtk_window_set_default_size(GTK_WINDOW(window), visualizer->width,
-                              visualizer->height);
+  gtk_window_set_default_size(GTK_WINDOW(window),
+                              visualizer->config.window_width,
+                              visualizer->config.window_height);
   gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
   gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
 
   gtk_layer_init_for_window(GTK_WINDOW(window));
   gtk_layer_set_namespace(GTK_WINDOW(window), "pipewire-visualizer");
   gtk_layer_set_layer(GTK_WINDOW(window), GTK_LAYER_SHELL_LAYER_OVERLAY);
-  gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_RIGHT, TRUE);
-  gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_BOTTOM, TRUE);
   gtk_layer_set_keyboard_mode(GTK_WINDOW(window),
                               GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
   gtk_layer_set_exclusive_zone(GTK_WINDOW(window), 0);
@@ -730,6 +1002,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
   gtk_widget_add_css_class(overlay, "pipewire-visualizer-overlay");
 
   GtkWidget *area = gtk_drawing_area_new();
+  visualizer->drawing_area = area;
+  apply_window_geometry(visualizer);
   gtk_widget_set_can_target(area, FALSE);
   gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), draw_cb, visualizer,
                                  NULL);

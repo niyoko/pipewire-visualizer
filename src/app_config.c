@@ -54,15 +54,69 @@ static gboolean has_key(GKeyFile *key_file, const char *group,
   return g_key_file_has_key(key_file, group, key, NULL);
 }
 
+static const char *anchor_to_string(PwvizWindowAnchor anchor) {
+  switch (anchor) {
+  case PWVIZ_ANCHOR_TOP_LEFT:
+    return "top-left";
+  case PWVIZ_ANCHOR_TOP:
+    return "top";
+  case PWVIZ_ANCHOR_TOP_RIGHT:
+    return "top-right";
+  case PWVIZ_ANCHOR_LEFT:
+    return "left";
+  case PWVIZ_ANCHOR_CENTER:
+    return "center";
+  case PWVIZ_ANCHOR_RIGHT:
+    return "right";
+  case PWVIZ_ANCHOR_BOTTOM_LEFT:
+    return "bottom-left";
+  case PWVIZ_ANCHOR_BOTTOM:
+    return "bottom";
+  case PWVIZ_ANCHOR_BOTTOM_RIGHT:
+    return "bottom-right";
+  }
+
+  return "bottom-right";
+}
+
+static PwvizWindowAnchor anchor_from_string(const char *value) {
+  if (g_strcmp0(value, "top-left") == 0)
+    return PWVIZ_ANCHOR_TOP_LEFT;
+  if (g_strcmp0(value, "top") == 0)
+    return PWVIZ_ANCHOR_TOP;
+  if (g_strcmp0(value, "top-right") == 0)
+    return PWVIZ_ANCHOR_TOP_RIGHT;
+  if (g_strcmp0(value, "left") == 0)
+    return PWVIZ_ANCHOR_LEFT;
+  if (g_strcmp0(value, "center") == 0)
+    return PWVIZ_ANCHOR_CENTER;
+  if (g_strcmp0(value, "right") == 0)
+    return PWVIZ_ANCHOR_RIGHT;
+  if (g_strcmp0(value, "bottom-left") == 0)
+    return PWVIZ_ANCHOR_BOTTOM_LEFT;
+  if (g_strcmp0(value, "bottom") == 0)
+    return PWVIZ_ANCHOR_BOTTOM;
+  if (g_strcmp0(value, "bottom-right") == 0)
+    return PWVIZ_ANCHOR_BOTTOM_RIGHT;
+
+  return PWVIZ_ANCHOR_BOTTOM_RIGHT;
+}
+
 void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->analyzer_mode = PWVIZ_ANALYZER_BARS;
+  config->window_anchor = PWVIZ_ANCHOR_BOTTOM_RIGHT;
   config->bar_count = PWVIZ_BAR_COUNT;
   config->block_height = 4;
   config->block_gap = 2;
+  config->window_width = 900;
+  config->window_height = 240;
+  config->x_margin = 0;
+  config->y_margin = 0;
   config->peak_hold_frames = PWVIZ_PEAK_HOLD_FRAMES;
   config->peak_fall_per_frame = PWVIZ_PEAK_FALL_PER_FRAME;
   config->display_threshold = 0.08f;
   config->background_alpha = 0.0;
+  config->bar_alpha = 0.35;
   config->show_border = TRUE;
   set_rgba(&config->low_color, 0.45, 0.0, 0.0, 1.0);
   set_rgba(&config->high_color, 1.0, 0.86, 0.0, 1.0);
@@ -156,6 +210,28 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
                                     NULL),
               0.0, 0.5);
 
+  if (has_key(key_file, "Window", "anchor")) {
+    char *anchor = g_key_file_get_string(key_file, "Window", "anchor", NULL);
+    config->window_anchor = anchor_from_string(anchor);
+    g_free(anchor);
+  }
+  if (has_key(key_file, "Window", "width"))
+    config->window_width =
+        CLAMP(g_key_file_get_integer(key_file, "Window", "width", NULL),
+              PWVIZ_MIN_WINDOW_WIDTH, 10000);
+  if (has_key(key_file, "Window", "height"))
+    config->window_height =
+        CLAMP(g_key_file_get_integer(key_file, "Window", "height", NULL),
+              PWVIZ_MIN_WINDOW_HEIGHT, 10000);
+  if (has_key(key_file, "Window", "x_margin"))
+    config->x_margin =
+        CLAMP(g_key_file_get_integer(key_file, "Window", "x_margin", NULL), 0,
+              10000);
+  if (has_key(key_file, "Window", "y_margin"))
+    config->y_margin =
+        CLAMP(g_key_file_get_integer(key_file, "Window", "y_margin", NULL), 0,
+              10000);
+
   if (has_key(key_file, "Style", "block_height"))
     config->block_height =
         CLAMP(g_key_file_get_integer(key_file, "Style", "block_height", NULL),
@@ -169,6 +245,10 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
         CLAMP(
             g_key_file_get_double(key_file, "Style", "background_alpha", NULL),
             0.0, 1.0);
+  if (has_key(key_file, "Style", "bar_alpha"))
+    config->bar_alpha =
+        CLAMP(g_key_file_get_double(key_file, "Style", "bar_alpha", NULL), 0.0,
+              1.0);
   if (has_key(key_file, "Style", "show_border"))
     config->show_border =
         g_key_file_get_boolean(key_file, "Style", "show_border", NULL);
@@ -208,11 +288,19 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
   g_key_file_set_double(key_file, "Analyzer", "display_threshold",
                         config->display_threshold);
 
+  g_key_file_set_string(key_file, "Window", "anchor",
+                        anchor_to_string(config->window_anchor));
+  g_key_file_set_integer(key_file, "Window", "width", config->window_width);
+  g_key_file_set_integer(key_file, "Window", "height", config->window_height);
+  g_key_file_set_integer(key_file, "Window", "x_margin", config->x_margin);
+  g_key_file_set_integer(key_file, "Window", "y_margin", config->y_margin);
+
   g_key_file_set_integer(key_file, "Style", "block_height",
                          config->block_height);
   g_key_file_set_integer(key_file, "Style", "block_gap", config->block_gap);
   g_key_file_set_double(key_file, "Style", "background_alpha",
                         config->background_alpha);
+  g_key_file_set_double(key_file, "Style", "bar_alpha", config->bar_alpha);
   g_key_file_set_boolean(key_file, "Style", "show_border",
                          config->show_border);
 
