@@ -87,6 +87,8 @@ typedef enum {
 typedef struct {
   PwvizVisualizer *visualizer;
   FontTarget target;
+  GtkDropDown *family;
+  GtkSpinButton *size;
 } FontBinding;
 
 static void apply_layer_position(PwvizVisualizer *visualizer);
@@ -307,7 +309,9 @@ static int font_pixel_size(const char *font_desc, int fallback) {
   int pixels = fallback;
 
   if (size > 0)
-    pixels = size / PANGO_SCALE;
+    pixels = pango_font_description_get_size_is_absolute(font)
+                 ? PANGO_PIXELS(size)
+                 : size / PANGO_SCALE;
 
   pango_font_description_free(font);
   return CLAMP(pixels, 8, 64);
@@ -1238,10 +1242,82 @@ static GtkWidget *color_control(PwvizVisualizer *visualizer, ColorTarget target,
   return button;
 }
 
-static void apply_font_description(FontBinding *binding,
-                                   const PangoFontDescription *font) {
-  if (!binding || !font)
+static gint string_pointer_compare(gconstpointer a, gconstpointer b) {
+  return g_utf8_collate(*(const char *const *)a, *(const char *const *)b);
+}
+
+static int font_point_size(const char *font_desc, int fallback) {
+  PangoFontDescription *font = pango_font_description_from_string(
+      font_desc && font_desc[0] != '\0' ? font_desc : "Sans 12");
+  int size = pango_font_description_get_size(font);
+  int points = fallback;
+
+  if (size > 0)
+    points = pango_font_description_get_size_is_absolute(font)
+                 ? PANGO_PIXELS(size)
+                 : size / PANGO_SCALE;
+
+  pango_font_description_free(font);
+  return CLAMP(points, 8, 64);
+}
+
+static const char *font_family_name(const char *font_desc) {
+  PangoFontDescription *font = pango_font_description_from_string(
+      font_desc && font_desc[0] != '\0' ? font_desc : "Sans 12");
+  const char *family = pango_font_description_get_family(font);
+  const char *name = family && family[0] != '\0' ? family : "Sans";
+  const char *interned = g_intern_string(name);
+
+  pango_font_description_free(font);
+  return interned;
+}
+
+static GtkStringList *font_family_model(const char *initial_family,
+                                        guint *initial_position) {
+  PangoFontMap *font_map = pango_cairo_font_map_get_default();
+  PangoFontFamily **families = NULL;
+  int n_families = 0;
+  GPtrArray *names = g_ptr_array_new();
+  GtkStringList *model = gtk_string_list_new(NULL);
+  gboolean found_initial = FALSE;
+
+  pango_font_map_list_families(font_map, &families, &n_families);
+  for (int i = 0; i < n_families; i++)
+    g_ptr_array_add(names, (gpointer)pango_font_family_get_name(families[i]));
+  g_ptr_array_sort(names, string_pointer_compare);
+
+  for (guint i = 0; i < names->len; i++) {
+    const char *family = g_ptr_array_index(names, i);
+
+    if (!found_initial && g_strcmp0(family, initial_family) == 0) {
+      *initial_position = i;
+      found_initial = TRUE;
+    }
+    gtk_string_list_append(model, family);
+  }
+
+  if (!found_initial) {
+    *initial_position = names->len;
+    gtk_string_list_append(model, initial_family);
+  }
+
+  g_ptr_array_free(names, TRUE);
+  g_free(families);
+  return model;
+}
+
+static void apply_font_selection(FontBinding *binding) {
+  if (!binding)
     return;
+
+  GtkStringObject *selected =
+      gtk_drop_down_get_selected_item(GTK_DROP_DOWN(binding->family));
+  const char *family = selected ? gtk_string_object_get_string(selected) : "Sans";
+  PangoFontDescription *font = pango_font_description_new();
+
+  pango_font_description_set_family(font, family);
+  pango_font_description_set_size(
+      font, gtk_spin_button_get_value_as_int(binding->size) * PANGO_SCALE);
 
   char *font_string = pango_font_description_to_string(font);
 
@@ -1260,47 +1336,61 @@ static void apply_font_description(FontBinding *binding,
             binding->target == FONT_NOW_PLAYING ? "Now playing" : "Lyrics",
             font_string);
   g_free(font_string);
+  pango_font_description_free(font);
   queue_visualizer_draw(binding->visualizer);
 }
 
-static void font_changed_cb(GtkFontDialogButton *button, gpointer data) {
-  FontBinding *binding = data;
-  PangoFontDescription *font = NULL;
-
-  g_object_get(button, "font-desc", &font, NULL);
-  apply_font_description(binding, font);
-  if (font)
-    pango_font_description_free(font);
+static void font_family_changed_cb(GtkDropDown *dropdown, GParamSpec *pspec,
+                                   gpointer data) {
+  (void)dropdown;
+  (void)pspec;
+  apply_font_selection(data);
 }
 
-static void free_font_binding(gpointer data, GClosure *closure) {
-  (void)closure;
+static void font_size_changed_cb(GtkSpinButton *spin, gpointer data) {
+  (void)spin;
+  apply_font_selection(data);
+}
+
+static void free_font_binding(gpointer data) {
   g_free(data);
 }
 
 static GtkWidget *font_control(PwvizVisualizer *visualizer, FontTarget target,
                                const char *initial, const char *title) {
-  GtkFontDialog *dialog = gtk_font_dialog_new();
-  GtkWidget *button = gtk_font_dialog_button_new(dialog);
-  PangoFontDescription *font = pango_font_description_from_string(
-      initial && initial[0] != '\0' ? initial : "Sans 12");
+  const char *family = font_family_name(initial);
+  int fallback_size = target == FONT_LYRICS ? 12 : 13;
+  guint initial_position = 0;
+  GtkStringList *families = font_family_model(family, &initial_position);
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *dropdown = gtk_drop_down_new(G_LIST_MODEL(families), NULL);
+  GtkWidget *size = gtk_spin_button_new_with_range(8, 64, 1);
   FontBinding *binding = g_new0(FontBinding, 1);
 
   binding->visualizer = visualizer;
   binding->target = target;
+  binding->family = GTK_DROP_DOWN(dropdown);
+  binding->size = GTK_SPIN_BUTTON(size);
 
-  gtk_font_dialog_set_title(dialog, title);
-  gtk_font_dialog_button_set_level(GTK_FONT_DIALOG_BUTTON(button),
-                                   GTK_FONT_LEVEL_FONT);
-  gtk_font_dialog_button_set_use_font(GTK_FONT_DIALOG_BUTTON(button), TRUE);
-  gtk_font_dialog_button_set_use_size(GTK_FONT_DIALOG_BUTTON(button), TRUE);
-  gtk_font_dialog_button_set_font_desc(GTK_FONT_DIALOG_BUTTON(button), font);
-  g_signal_connect_data(button, "notify::font-desc",
-                        G_CALLBACK(font_changed_cb), binding,
-                        free_font_binding, 0);
+  gtk_drop_down_set_enable_search(GTK_DROP_DOWN(dropdown), TRUE);
+  gtk_drop_down_set_selected(GTK_DROP_DOWN(dropdown), initial_position);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(size),
+                            font_point_size(initial, fallback_size));
+  gtk_widget_set_tooltip_text(box, title);
+  gtk_widget_set_hexpand(dropdown, TRUE);
+  gtk_widget_set_halign(dropdown, GTK_ALIGN_FILL);
+  gtk_widget_set_size_request(size, 72, -1);
+  gtk_box_append(GTK_BOX(box), dropdown);
+  gtk_box_append(GTK_BOX(box), size);
 
-  pango_font_description_free(font);
-  return button;
+  g_object_set_data_full(G_OBJECT(box), "font-binding", binding,
+                         free_font_binding);
+  g_signal_connect(dropdown, "notify::selected",
+                   G_CALLBACK(font_family_changed_cb), binding);
+  g_signal_connect(size, "value-changed", G_CALLBACK(font_size_changed_cb),
+                   binding);
+  g_object_unref(families);
+  return box;
 }
 
 static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
@@ -2039,9 +2129,7 @@ static void install_transparent_window_css(void) {
   gtk_css_provider_load_from_string(
       provider,
       "window.pipewire-visualizer-window, .pipewire-visualizer-overlay { "
-      "background: transparent; } "
-      "scale.pwviz-scale, scale.pwviz-scale trough, "
-      "scale.pwviz-scale slider { min-width: 14px; min-height: 14px; }");
+      "background: transparent; }");
   gtk_style_context_add_provider_for_display(
       gdk_display_get_default(), GTK_STYLE_PROVIDER(provider),
       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
