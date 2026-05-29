@@ -54,6 +54,37 @@ static gboolean has_key(GKeyFile *key_file, const char *group,
   return g_key_file_has_key(key_file, group, key, NULL);
 }
 
+static void load_font_setting(GKeyFile *key_file, const char *group,
+                              const char *font_key,
+                              const char *legacy_family_key,
+                              const char *legacy_size_key, char *dest,
+                              gsize dest_size) {
+  if (has_key(key_file, group, font_key)) {
+    char *font = g_key_file_get_string(key_file, group, font_key, NULL);
+    g_strlcpy(dest, font, dest_size);
+    g_free(font);
+    return;
+  }
+
+  if (has_key(key_file, group, legacy_family_key) ||
+      has_key(key_file, group, legacy_size_key)) {
+    char *family = has_key(key_file, group, legacy_family_key)
+                       ? g_key_file_get_string(key_file, group,
+                                               legacy_family_key, NULL)
+                       : g_strdup("Sans");
+    int size = has_key(key_file, group, legacy_size_key)
+                   ? CLAMP(g_key_file_get_integer(key_file, group,
+                                                  legacy_size_key, NULL),
+                           8, 32)
+                   : 12;
+    char *font = g_strdup_printf("%s %d", family, size);
+
+    g_strlcpy(dest, font, dest_size);
+    g_free(font);
+    g_free(family);
+  }
+}
+
 static const char *anchor_to_string(PwvizWindowAnchor anchor) {
   switch (anchor) {
   case PWVIZ_ANCHOR_TOP_LEFT:
@@ -136,8 +167,7 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->window_height = 240;
   config->x_margin = 0;
   config->y_margin = 0;
-  config->now_playing_height = 34;
-  config->now_playing_font_size = 13;
+  config->now_playing_height = 112;
   config->falloff_rate = 12;
   config->peak_change_rate = 80;
   config->peak_fall_per_frame = PWVIZ_PEAK_FALL_PER_FRAME;
@@ -147,18 +177,29 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->background_alpha = 0.0;
   config->bar_alpha = 0.35;
   config->now_playing_alpha = 0.72;
+  config->now_playing_outline_width = 1.2;
+  config->lyrics_outline_width = 1.2;
   config->fft_equalize = TRUE;
   config->now_playing_enabled = TRUE;
   config->now_playing_show_app = TRUE;
   config->now_playing_show_title = TRUE;
   config->now_playing_show_artist = TRUE;
   config->now_playing_show_album = TRUE;
+  config->lyrics_enabled = TRUE;
+  config->lyrics_two_lines = TRUE;
   set_rgba(&config->low_color, 0.45, 0.0, 0.0, 1.0);
   set_rgba(&config->high_color, 1.0, 0.86, 0.0, 1.0);
   set_rgba(&config->peak_color, 1.0, 0.92, 0.20, 1.0);
   set_rgba(&config->background_color, 0.015, 0.010, 0.008, 1.0);
+  set_rgba(&config->now_playing_text_color, 1.0, 1.0, 1.0, 1.0);
+  set_rgba(&config->now_playing_outline_color, 0.0, 0.0, 0.0, 1.0);
+  set_rgba(&config->lyrics_text_color, 1.0, 1.0, 1.0, 1.0);
+  set_rgba(&config->lyrics_outline_color, 0.0, 0.0, 0.0, 1.0);
   g_strlcpy(config->profile_name, "Default Red & Yellow",
             sizeof(config->profile_name));
+  g_strlcpy(config->now_playing_font, "Sans 13",
+            sizeof(config->now_playing_font));
+  g_strlcpy(config->lyrics_font, "Sans 12", sizeof(config->lyrics_font));
 }
 
 void pwviz_app_config_apply_profile(PwvizAppConfig *config,
@@ -317,11 +358,14 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
     config->now_playing_height =
         CLAMP(g_key_file_get_integer(key_file, "Now Playing", "height", NULL),
               0, 160);
-  if (has_key(key_file, "Now Playing", "font_size"))
-    config->now_playing_font_size =
-        CLAMP(g_key_file_get_integer(key_file, "Now Playing", "font_size",
-                                     NULL),
-              8, 32);
+  load_font_setting(key_file, "Now Playing", "font", "font_family",
+                    "font_size", config->now_playing_font,
+                    sizeof(config->now_playing_font));
+  if (has_key(key_file, "Now Playing", "outline_width"))
+    config->now_playing_outline_width =
+        CLAMP(g_key_file_get_double(key_file, "Now Playing", "outline_width",
+                                    NULL),
+              0.0, 6.0);
   if (has_key(key_file, "Now Playing", "alpha"))
     config->now_playing_alpha =
         CLAMP(g_key_file_get_double(key_file, "Now Playing", "alpha", NULL),
@@ -338,6 +382,22 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
   if (has_key(key_file, "Now Playing", "show_album"))
     config->now_playing_show_album =
         g_key_file_get_boolean(key_file, "Now Playing", "show_album", NULL);
+  if (has_key(key_file, "Now Playing", "lyrics_enabled"))
+    config->lyrics_enabled =
+        g_key_file_get_boolean(key_file, "Now Playing", "lyrics_enabled",
+                               NULL);
+  if (has_key(key_file, "Now Playing", "lyrics_two_lines"))
+    config->lyrics_two_lines =
+        g_key_file_get_boolean(key_file, "Now Playing", "lyrics_two_lines",
+                               NULL);
+  load_font_setting(key_file, "Now Playing", "lyrics_font",
+                    "lyrics_font_family", "lyrics_font_size",
+                    config->lyrics_font, sizeof(config->lyrics_font));
+  if (has_key(key_file, "Now Playing", "lyrics_outline_width"))
+    config->lyrics_outline_width =
+        CLAMP(g_key_file_get_double(key_file, "Now Playing",
+                                    "lyrics_outline_width", NULL),
+              0.0, 6.0);
 
   if (has_key(key_file, "Style", "block_height"))
     config->block_height =
@@ -383,6 +443,14 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
   get_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
   get_color(key_file, "Colour Factory", "background_color",
             &config->background_color);
+  get_color(key_file, "Now Playing", "text_color",
+            &config->now_playing_text_color);
+  get_color(key_file, "Now Playing", "outline_color",
+            &config->now_playing_outline_color);
+  get_color(key_file, "Now Playing", "lyrics_text_color",
+            &config->lyrics_text_color);
+  get_color(key_file, "Now Playing", "lyrics_outline_color",
+            &config->lyrics_outline_color);
 
   char *profile =
       g_key_file_get_string(key_file, "Profiles", "current", NULL);
@@ -437,8 +505,10 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
                          config->now_playing_enabled);
   g_key_file_set_integer(key_file, "Now Playing", "height",
                          config->now_playing_height);
-  g_key_file_set_integer(key_file, "Now Playing", "font_size",
-                         config->now_playing_font_size);
+  g_key_file_set_string(key_file, "Now Playing", "font",
+                        config->now_playing_font);
+  g_key_file_set_double(key_file, "Now Playing", "outline_width",
+                        config->now_playing_outline_width);
   g_key_file_set_double(key_file, "Now Playing", "alpha",
                         config->now_playing_alpha);
   g_key_file_set_boolean(key_file, "Now Playing", "show_app",
@@ -449,6 +519,14 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
                          config->now_playing_show_artist);
   g_key_file_set_boolean(key_file, "Now Playing", "show_album",
                          config->now_playing_show_album);
+  g_key_file_set_boolean(key_file, "Now Playing", "lyrics_enabled",
+                         config->lyrics_enabled);
+  g_key_file_set_boolean(key_file, "Now Playing", "lyrics_two_lines",
+                         config->lyrics_two_lines);
+  g_key_file_set_string(key_file, "Now Playing", "lyrics_font",
+                        config->lyrics_font);
+  g_key_file_set_double(key_file, "Now Playing", "lyrics_outline_width",
+                        config->lyrics_outline_width);
 
   g_key_file_set_integer(key_file, "Style", "block_height",
                          config->block_height);
@@ -468,6 +546,14 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
   set_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
   set_color(key_file, "Colour Factory", "background_color",
             &config->background_color);
+  set_color(key_file, "Now Playing", "text_color",
+            &config->now_playing_text_color);
+  set_color(key_file, "Now Playing", "outline_color",
+            &config->now_playing_outline_color);
+  set_color(key_file, "Now Playing", "lyrics_text_color",
+            &config->lyrics_text_color);
+  set_color(key_file, "Now Playing", "lyrics_outline_color",
+            &config->lyrics_outline_color);
 
   g_key_file_set_string(key_file, "Profiles", "current",
                         config->profile_name);

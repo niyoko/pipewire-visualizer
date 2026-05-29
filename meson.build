@@ -8,7 +8,9 @@ deps = [
   dependency('gtk4'),
   dependency('gtk4-layer-shell-0'),
   dependency('fftw3f'),
+  dependency('json-glib-1.0'),
   dependency('libspa-0.2'),
+  dependency('libsoup-3.0'),
   m_dep,
 ]
 
@@ -18,6 +20,7 @@ sources = [
   'src/binning.c',
   'src/fft.c',
   'src/global_shortcut.c',
+  'src/lyrics.c',
   'src/main.c',
   'src/now_playing.c',
   'src/pipewire_sink.c',

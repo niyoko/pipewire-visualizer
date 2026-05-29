@@ -41,6 +41,31 @@ static gboolean get_string_property(GDBusConnection *connection,
   return buffer[0] != '\0';
 }
 
+static gboolean get_int64_property(GDBusConnection *connection,
+                                   const char *bus_name,
+                                   const char *interface,
+                                   const char *property, gint64 *out_value) {
+  GVariant *result = g_dbus_connection_call_sync(
+      connection, bus_name, "/org/mpris/MediaPlayer2", DBUS_PROPERTIES_IFACE,
+      "Get", g_variant_new("(ss)", interface, property), G_VARIANT_TYPE("(v)"),
+      G_DBUS_CALL_FLAGS_NONE, 100, NULL, NULL);
+
+  if (!result)
+    return FALSE;
+
+  gboolean found = FALSE;
+  GVariant *value = NULL;
+  g_variant_get(result, "(v)", &value);
+  if (value && g_variant_is_of_type(value, G_VARIANT_TYPE_INT64)) {
+    *out_value = g_variant_get_int64(value);
+    found = TRUE;
+  }
+
+  g_clear_pointer(&value, g_variant_unref);
+  g_variant_unref(result);
+  return found;
+}
+
 static void set_bus_fallback_app(const char *bus_name, char *buffer,
                                  gsize buffer_size) {
   const char *name = g_str_has_prefix(bus_name, MPRIS_PREFIX)
@@ -83,6 +108,18 @@ static void copy_metadata_string_array(GVariant *metadata, const char *key,
   g_variant_unref(value);
 }
 
+static void copy_metadata_int64(GVariant *metadata, const char *key,
+                                gint64 *out_value) {
+  GVariant *value = g_variant_lookup_value(metadata, key,
+                                           G_VARIANT_TYPE_INT64);
+
+  if (!value)
+    return;
+
+  *out_value = g_variant_get_int64(value);
+  g_variant_unref(value);
+}
+
 static gboolean get_metadata(GDBusConnection *connection, const char *bus_name,
                              PlayerCandidate *candidate) {
   GVariant *result = g_dbus_connection_call_sync(
@@ -103,6 +140,8 @@ static gboolean get_metadata(GDBusConnection *connection, const char *bus_name,
                                sizeof(candidate->now_playing.artist));
     copy_metadata_string(value, "xesam:album", candidate->now_playing.album,
                          sizeof(candidate->now_playing.album));
+    copy_metadata_int64(value, "mpris:length",
+                        &candidate->now_playing.duration_us);
   }
 
   g_clear_pointer(&value, g_variant_unref);
@@ -131,6 +170,9 @@ static gboolean read_player(GDBusConnection *connection, const char *bus_name,
                       "PlaybackStatus", playback_status,
                       sizeof(playback_status));
   candidate->playing = g_strcmp0(playback_status, "Playing") == 0;
+  candidate->now_playing.playing = candidate->playing;
+  get_int64_property(connection, bus_name, MPRIS_PLAYER_IFACE, "Position",
+                     &candidate->now_playing.position_us);
 
   if (!get_metadata(connection, bus_name, candidate))
     return FALSE;

@@ -5,6 +5,7 @@
 #include "config.h"
 #include "fft.h"
 #include "global_shortcut.h"
+#include "lyrics.h"
 #include "now_playing.h"
 
 #include <gtk/gtk.h>
@@ -19,6 +20,7 @@ typedef struct {
   PwvizAudioBuffer *audio_buffer;
   PwvizGlobalShortcut *global_shortcut;
   PwvizNowPlaying now_playing;
+  PwvizLyrics *lyrics;
   PwvizAppConfig config;
   PwvizAppConfig config_snapshot;
   PwvizFft fft;
@@ -30,6 +32,11 @@ typedef struct {
   float peak_caps[PWVIZ_BAR_COUNT];
   int peak_holds[PWVIZ_BAR_COUNT];
   guint now_playing_source;
+  GAsyncQueue *lyrics_results;
+  gboolean lyrics_fetching;
+  char lyrics_key[512];
+  char lyrics_fetching_key[512];
+  gboolean destroying;
   int width;
   int height;
 } PwvizVisualizer;
@@ -39,10 +46,15 @@ typedef enum {
   COLOR_HIGH,
   COLOR_PEAK,
   COLOR_BACKGROUND,
+  COLOR_NOW_PLAYING_TEXT,
+  COLOR_NOW_PLAYING_OUTLINE,
+  COLOR_LYRICS_TEXT,
+  COLOR_LYRICS_OUTLINE,
 } ColorTarget;
 
 enum {
   INACTIVE_BAR_ALPHA = 0,
+  LYRICS_OFFSET_STEP_MS = 250,
 };
 
 typedef struct {
@@ -66,6 +78,16 @@ typedef struct {
   PwvizVisualizer *visualizer;
   ColorTarget target;
 } ColorBinding;
+
+typedef enum {
+  FONT_NOW_PLAYING,
+  FONT_LYRICS,
+} FontTarget;
+
+typedef struct {
+  PwvizVisualizer *visualizer;
+  FontTarget target;
+} FontBinding;
 
 static void apply_layer_position(PwvizVisualizer *visualizer);
 static void apply_window_geometry(PwvizVisualizer *visualizer);
@@ -278,13 +300,36 @@ static int effective_bar_count(PwvizVisualizer *visualizer, int width) {
   return CLAMP(visualizer->config.bar_count, 1, PWVIZ_BAR_COUNT);
 }
 
+static int font_pixel_size(const char *font_desc, int fallback) {
+  PangoFontDescription *font = pango_font_description_from_string(
+      font_desc && font_desc[0] != '\0' ? font_desc : "Sans 12");
+  int size = pango_font_description_get_size(font);
+  int pixels = fallback;
+
+  if (size > 0)
+    pixels = size / PANGO_SCALE;
+
+  pango_font_description_free(font);
+  return CLAMP(pixels, 8, 64);
+}
+
 static int now_playing_height(PwvizVisualizer *visualizer) {
   if (!visualizer->config.now_playing_enabled ||
       !visualizer->now_playing.available)
     return 0;
 
-  return CLAMP(visualizer->config.now_playing_height, 0,
-               visualizer->height / 2);
+  int metadata_size = font_pixel_size(visualizer->config.now_playing_font, 13);
+  int lyric_size = font_pixel_size(visualizer->config.lyrics_font, 12);
+  int metadata_h = metadata_size + 16;
+  int lyric_h = visualizer->config.lyrics_enabled
+                    ? lyric_size *
+                              (visualizer->config.lyrics_two_lines ? 2 : 1) +
+                          24
+                    : 0;
+  int minimum = metadata_h + lyric_h;
+
+  return CLAMP(MAX(visualizer->config.now_playing_height, minimum), 0,
+               MAX(0, visualizer->height - 24));
 }
 
 static void update_peak_cap(PwvizVisualizer *visualizer, int index) {
@@ -418,6 +463,43 @@ static char *now_playing_text(PwvizVisualizer *visualizer) {
   return g_string_free(line, FALSE);
 }
 
+static void draw_ellipsized_text(cairo_t *cr, const char *text,
+                                 const char *font_desc, double x, double y,
+                                 int width,
+                                 const GdkRGBA *text_color,
+                                 const GdkRGBA *outline_color,
+                                 double outline_width, double alpha) {
+  if (!text || text[0] == '\0')
+    return;
+
+  PangoLayout *layout = pango_cairo_create_layout(cr);
+  PangoFontDescription *font = pango_font_description_from_string(
+      font_desc && font_desc[0] != '\0' ? font_desc : "Sans 12");
+
+  pango_layout_set_font_description(layout, font);
+  pango_layout_set_width(layout, MAX(1, width) * PANGO_SCALE);
+  pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+  pango_layout_set_single_paragraph_mode(layout, TRUE);
+  pango_layout_set_text(layout, text, -1);
+
+  cairo_move_to(cr, x, y);
+  pango_cairo_layout_path(cr, layout);
+  if (outline_width > 0.0) {
+    cairo_set_source_rgba(cr, outline_color->red, outline_color->green,
+                          outline_color->blue,
+                          color_alpha(alpha, outline_color->alpha));
+    cairo_set_line_width(cr, outline_width);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_stroke_preserve(cr);
+  }
+  cairo_set_source_rgba(cr, text_color->red, text_color->green,
+                        text_color->blue, color_alpha(alpha, text_color->alpha));
+  cairo_fill(cr);
+
+  pango_font_description_free(font);
+  g_object_unref(layout);
+}
+
 static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
                              int width, int height) {
   int section_h = now_playing_height(visualizer);
@@ -437,36 +519,62 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
   cairo_rectangle(cr, 0.0, y, width, section_h);
   cairo_fill(cr);
 
-  PangoLayout *layout = pango_cairo_create_layout(cr);
-  PangoFontDescription *font = pango_font_description_new();
+  const char *current_lyric = NULL;
+  const char *next_lyric = NULL;
+  if (visualizer->config.lyrics_enabled)
+    pwviz_lyrics_current_lines(visualizer->lyrics,
+                               visualizer->now_playing.position_us,
+                               &current_lyric, &next_lyric);
 
-  pango_font_description_set_family(font, "Sans");
-  pango_font_description_set_size(
-      font, visualizer->config.now_playing_font_size * PANGO_SCALE);
-  pango_layout_set_font_description(layout, font);
-  pango_layout_set_width(layout, MAX(1, width - 16) * PANGO_SCALE);
-  pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-  pango_layout_set_single_paragraph_mode(layout, TRUE);
-  pango_layout_set_text(layout, text, -1);
+  int content_w = MAX(1, width - 16);
+  int metadata_size = font_pixel_size(visualizer->config.now_playing_font, 13);
+  int lyric_size = font_pixel_size(visualizer->config.lyrics_font, 12);
+  if (current_lyric) {
+    double title_y = y + 7.0;
+    double current_y = y + 10.0 + metadata_size + 8.0;
+    double next_y = current_y + lyric_size + 10.0;
 
-  int text_h = 0;
-  pango_layout_get_pixel_size(layout, NULL, &text_h);
-  double text_y = y + MAX(0, section_h - text_h) / 2.0;
+    draw_ellipsized_text(cr, text, visualizer->config.now_playing_font, 8.0,
+                         title_y, content_w,
+                         &visualizer->config.now_playing_text_color,
+                         &visualizer->config.now_playing_outline_color,
+                         visualizer->config.now_playing_outline_width, 0.78);
+    draw_ellipsized_text(cr, current_lyric, visualizer->config.lyrics_font, 8.0,
+                         current_y, content_w,
+                         &visualizer->config.lyrics_text_color,
+                         &visualizer->config.lyrics_outline_color,
+                         visualizer->config.lyrics_outline_width, 0.98);
+    if (visualizer->config.lyrics_two_lines && next_lyric &&
+        next_y + lyric_size <= y + section_h - 4.0)
+      draw_ellipsized_text(cr, next_lyric, visualizer->config.lyrics_font, 8.0,
+                           next_y, content_w,
+                           &visualizer->config.lyrics_text_color,
+                           &visualizer->config.lyrics_outline_color,
+                           visualizer->config.lyrics_outline_width, 0.62);
+  } else {
+    draw_ellipsized_text(cr, text, visualizer->config.now_playing_font,
+                         8.0, y + MAX(0, section_h - metadata_size) / 2.0,
+                         content_w, &visualizer->config.now_playing_text_color,
+                         &visualizer->config.now_playing_outline_color,
+                         visualizer->config.now_playing_outline_width, 0.96);
+  }
 
-  cairo_move_to(cr, 8.0, text_y);
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.96);
-  pango_cairo_show_layout(cr, layout);
-
-  pango_font_description_free(font);
-  g_object_unref(layout);
   g_free(text);
 }
 
 static void queue_visualizer_draw(PwvizVisualizer *visualizer) {
-  gtk_widget_queue_draw(GTK_WIDGET(visualizer->window));
+  if (!visualizer || visualizer->destroying || !visualizer->drawing_area ||
+      !GTK_IS_WIDGET(visualizer->drawing_area))
+    return;
+
+  gtk_widget_queue_draw(visualizer->drawing_area);
 }
 
 static void update_input_region(PwvizVisualizer *visualizer) {
+  if (!visualizer || visualizer->destroying || !visualizer->window ||
+      !GTK_IS_WINDOW(visualizer->window))
+    return;
+
   GdkSurface *surface =
       gtk_native_get_surface(GTK_NATIVE(visualizer->window));
   if (!surface)
@@ -609,13 +717,87 @@ static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
   return G_SOURCE_CONTINUE;
 }
 
+typedef struct {
+  GAsyncQueue *queue;
+  PwvizNowPlaying now_playing;
+  PwvizLyrics *lyrics;
+  char key[512];
+} LyricsFetch;
+
+static gpointer lyrics_fetch_thread(gpointer data) {
+  LyricsFetch *fetch = data;
+
+  fetch->lyrics = pwviz_lyrics_fetch(&fetch->now_playing);
+  g_async_queue_push(fetch->queue, fetch);
+  g_async_queue_unref(fetch->queue);
+  return NULL;
+}
+
+static void lyrics_fetch_free(LyricsFetch *fetch) {
+  if (!fetch)
+    return;
+
+  pwviz_lyrics_free(fetch->lyrics);
+  g_free(fetch);
+}
+
+static void poll_lyrics_results(PwvizVisualizer *visualizer) {
+  LyricsFetch *fetch = NULL;
+
+  while ((fetch = g_async_queue_try_pop(visualizer->lyrics_results))) {
+    if (visualizer->lyrics_fetching &&
+        g_strcmp0(visualizer->lyrics_fetching_key, fetch->key) == 0) {
+      visualizer->lyrics_fetching = FALSE;
+      visualizer->lyrics_fetching_key[0] = '\0';
+      g_strlcpy(visualizer->lyrics_key, fetch->key,
+                sizeof(visualizer->lyrics_key));
+      pwviz_lyrics_free(visualizer->lyrics);
+      visualizer->lyrics = fetch->lyrics;
+      fetch->lyrics = NULL;
+    }
+    lyrics_fetch_free(fetch);
+  }
+}
+
+static void maybe_start_lyrics_fetch(PwvizVisualizer *visualizer) {
+  if (!visualizer->config.lyrics_enabled || !visualizer->now_playing.available ||
+      visualizer->now_playing.title[0] == '\0') {
+    pwviz_lyrics_free(visualizer->lyrics);
+    visualizer->lyrics = NULL;
+    visualizer->lyrics_key[0] = '\0';
+    visualizer->lyrics_fetching = FALSE;
+    visualizer->lyrics_fetching_key[0] = '\0';
+    return;
+  }
+
+  char key[512];
+  pwviz_lyrics_key_for_track(&visualizer->now_playing, key, sizeof(key));
+  if (g_strcmp0(visualizer->lyrics_key, key) == 0 ||
+      (visualizer->lyrics_fetching &&
+       g_strcmp0(visualizer->lyrics_fetching_key, key) == 0))
+    return;
+
+  LyricsFetch *fetch = g_new0(LyricsFetch, 1);
+  fetch->queue = g_async_queue_ref(visualizer->lyrics_results);
+  fetch->now_playing = visualizer->now_playing;
+  g_strlcpy(fetch->key, key, sizeof(fetch->key));
+  visualizer->lyrics_fetching = TRUE;
+  g_strlcpy(visualizer->lyrics_fetching_key, key,
+            sizeof(visualizer->lyrics_fetching_key));
+  g_thread_unref(g_thread_new("lyrics-fetch", lyrics_fetch_thread, fetch));
+}
+
 static gboolean now_playing_refresh_cb(gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  if (visualizer->config.now_playing_enabled)
+  poll_lyrics_results(visualizer);
+  if (visualizer->config.now_playing_enabled) {
     pwviz_now_playing_refresh(&visualizer->now_playing);
-  else
+    maybe_start_lyrics_fetch(visualizer);
+  } else {
     pwviz_now_playing_clear(&visualizer->now_playing);
+    maybe_start_lyrics_fetch(visualizer);
+  }
 
   queue_visualizer_draw(visualizer);
   return G_SOURCE_CONTINUE;
@@ -638,8 +820,9 @@ static GtkWidget *section_label(const char *label) {
 
 static void prepare_scale(GtkWidget *scale, int digits) {
   gtk_scale_set_digits(GTK_SCALE(scale), digits);
-  gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
-  gtk_scale_set_value_pos(GTK_SCALE(scale), GTK_POS_RIGHT);
+  gtk_scale_set_draw_value(GTK_SCALE(scale), FALSE);
+  gtk_widget_set_size_request(scale, 180, 32);
+  gtk_widget_add_css_class(scale, "pwviz-scale");
 }
 
 static void prepare_spin(GtkWidget *spin) {
@@ -891,6 +1074,7 @@ static void now_playing_enabled_toggled_cb(GtkCheckButton *button,
     pwviz_now_playing_refresh(&visualizer->now_playing);
   else
     pwviz_now_playing_clear(&visualizer->now_playing);
+  maybe_start_lyrics_fetch(visualizer);
   queue_visualizer_draw(visualizer);
 }
 
@@ -918,12 +1102,19 @@ static void now_playing_height_changed_cb(GtkSpinButton *spin, gpointer data) {
   queue_visualizer_draw(visualizer);
 }
 
-static void now_playing_font_size_changed_cb(GtkSpinButton *spin,
-                                             gpointer data) {
+static void now_playing_outline_width_changed_cb(GtkSpinButton *spin,
+                                                 gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  visualizer->config.now_playing_font_size =
-      gtk_spin_button_get_value_as_int(spin);
+  visualizer->config.now_playing_outline_width =
+      gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_outline_width_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_outline_width = gtk_spin_button_get_value(spin);
   queue_visualizer_draw(visualizer);
 }
 
@@ -931,6 +1122,21 @@ static void now_playing_alpha_changed_cb(GtkRange *range, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
   visualizer->config.now_playing_alpha = gtk_range_get_value(range);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_enabled_toggled_cb(GtkCheckButton *button, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_enabled = gtk_check_button_get_active(button);
+  maybe_start_lyrics_fetch(visualizer);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_two_lines_toggled_cb(GtkCheckButton *button, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_two_lines = gtk_check_button_get_active(button);
   queue_visualizer_draw(visualizer);
 }
 
@@ -993,6 +1199,18 @@ static void color_changed_cb(GtkColorDialogButton *button, gpointer data) {
   case COLOR_BACKGROUND:
     binding->visualizer->config.background_color = *color;
     break;
+  case COLOR_NOW_PLAYING_TEXT:
+    binding->visualizer->config.now_playing_text_color = *color;
+    break;
+  case COLOR_NOW_PLAYING_OUTLINE:
+    binding->visualizer->config.now_playing_outline_color = *color;
+    break;
+  case COLOR_LYRICS_TEXT:
+    binding->visualizer->config.lyrics_text_color = *color;
+    break;
+  case COLOR_LYRICS_OUTLINE:
+    binding->visualizer->config.lyrics_outline_color = *color;
+    break;
   }
 
   queue_visualizer_draw(binding->visualizer);
@@ -1017,6 +1235,71 @@ static GtkWidget *color_control(PwvizVisualizer *visualizer, ColorTarget target,
   gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(button), initial);
   g_signal_connect_data(button, "notify::rgba", G_CALLBACK(color_changed_cb),
                         binding, free_color_binding, 0);
+  return button;
+}
+
+static void apply_font_description(FontBinding *binding,
+                                   const PangoFontDescription *font) {
+  if (!binding || !font)
+    return;
+
+  char *font_string = pango_font_description_to_string(font);
+
+  switch (binding->target) {
+  case FONT_NOW_PLAYING:
+    g_strlcpy(binding->visualizer->config.now_playing_font, font_string,
+              sizeof(binding->visualizer->config.now_playing_font));
+    break;
+  case FONT_LYRICS:
+    g_strlcpy(binding->visualizer->config.lyrics_font, font_string,
+              sizeof(binding->visualizer->config.lyrics_font));
+    break;
+  }
+
+  g_message("%s font: %s",
+            binding->target == FONT_NOW_PLAYING ? "Now playing" : "Lyrics",
+            font_string);
+  g_free(font_string);
+  queue_visualizer_draw(binding->visualizer);
+}
+
+static void font_changed_cb(GtkFontDialogButton *button, gpointer data) {
+  FontBinding *binding = data;
+  PangoFontDescription *font = NULL;
+
+  g_object_get(button, "font-desc", &font, NULL);
+  apply_font_description(binding, font);
+  if (font)
+    pango_font_description_free(font);
+}
+
+static void free_font_binding(gpointer data, GClosure *closure) {
+  (void)closure;
+  g_free(data);
+}
+
+static GtkWidget *font_control(PwvizVisualizer *visualizer, FontTarget target,
+                               const char *initial, const char *title) {
+  GtkFontDialog *dialog = gtk_font_dialog_new();
+  GtkWidget *button = gtk_font_dialog_button_new(dialog);
+  PangoFontDescription *font = pango_font_description_from_string(
+      initial && initial[0] != '\0' ? initial : "Sans 12");
+  FontBinding *binding = g_new0(FontBinding, 1);
+
+  binding->visualizer = visualizer;
+  binding->target = target;
+
+  gtk_font_dialog_set_title(dialog, title);
+  gtk_font_dialog_button_set_level(GTK_FONT_DIALOG_BUTTON(button),
+                                   GTK_FONT_LEVEL_FONT);
+  gtk_font_dialog_button_set_use_font(GTK_FONT_DIALOG_BUTTON(button), TRUE);
+  gtk_font_dialog_button_set_use_size(GTK_FONT_DIALOG_BUTTON(button), TRUE);
+  gtk_font_dialog_button_set_font_desc(GTK_FONT_DIALOG_BUTTON(button), font);
+  g_signal_connect_data(button, "notify::font-desc",
+                        G_CALLBACK(font_changed_cb), binding,
+                        free_font_binding, 0);
+
+  pango_font_description_free(font);
   return button;
 }
 
@@ -1331,24 +1614,41 @@ static GtkWidget *now_playing_field_toggle(PwvizVisualizer *visualizer,
 }
 
 static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
+  GtkWidget *scroller = gtk_scrolled_window_new();
   GtkWidget *box = tab_box();
   GtkWidget *enabled = gtk_check_button_new_with_label("Show Now Playing");
+  GtkWidget *lyrics = gtk_check_button_new_with_label("Fetch lyrics");
+  GtkWidget *two_lines = gtk_check_button_new_with_label("Two lyric lines");
   GtkWidget *fields = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *height = gtk_spin_button_new_with_range(0, 160, 1);
-  GtkWidget *font_size = gtk_spin_button_new_with_range(8, 32, 1);
+  GtkWidget *font =
+      font_control(visualizer, FONT_NOW_PLAYING,
+                   visualizer->config.now_playing_font, "Now Playing Font");
+  GtkWidget *lyrics_font = font_control(
+      visualizer, FONT_LYRICS, visualizer->config.lyrics_font, "Lyrics Font");
+  GtkWidget *outline_width = gtk_spin_button_new_with_range(0.0, 6.0, 0.1);
+  GtkWidget *lyrics_outline_width =
+      gtk_spin_button_new_with_range(0.0, 6.0, 0.1);
   GtkWidget *alpha =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
 
   prepare_spin(height);
-  prepare_spin(font_size);
+  prepare_spin(outline_width);
+  prepare_spin(lyrics_outline_width);
   prepare_scale(alpha, 2);
 
   gtk_check_button_set_active(GTK_CHECK_BUTTON(enabled),
                               visualizer->config.now_playing_enabled);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(lyrics),
+                              visualizer->config.lyrics_enabled);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(two_lines),
+                              visualizer->config.lyrics_two_lines);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(height),
                             visualizer->config.now_playing_height);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(font_size),
-                            visualizer->config.now_playing_font_size);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(outline_width),
+                            visualizer->config.now_playing_outline_width);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_outline_width),
+                            visualizer->config.lyrics_outline_width);
   gtk_range_set_value(GTK_RANGE(alpha), visualizer->config.now_playing_alpha);
 
   gtk_box_append(GTK_BOX(fields),
@@ -1370,22 +1670,59 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
 
   g_signal_connect(enabled, "toggled",
                    G_CALLBACK(now_playing_enabled_toggled_cb), visualizer);
+  g_signal_connect(lyrics, "toggled", G_CALLBACK(lyrics_enabled_toggled_cb),
+                   visualizer);
+  g_signal_connect(two_lines, "toggled",
+                   G_CALLBACK(lyrics_two_lines_toggled_cb), visualizer);
   g_signal_connect(height, "value-changed",
                    G_CALLBACK(now_playing_height_changed_cb), visualizer);
-  g_signal_connect(font_size, "value-changed",
-                   G_CALLBACK(now_playing_font_size_changed_cb), visualizer);
+  g_signal_connect(outline_width, "value-changed",
+                   G_CALLBACK(now_playing_outline_width_changed_cb),
+                   visualizer);
+  g_signal_connect(lyrics_outline_width, "value-changed",
+                   G_CALLBACK(lyrics_outline_width_changed_cb), visualizer);
   g_signal_connect(alpha, "value-changed",
                    G_CALLBACK(now_playing_alpha_changed_cb), visualizer);
 
   gtk_box_append(GTK_BOX(box), section_label("Metadata"));
   gtk_box_append(GTK_BOX(box), enabled);
   gtk_box_append(GTK_BOX(box), control_row("Fields", fields));
+  gtk_box_append(GTK_BOX(box), control_row("Font", font));
+  gtk_box_append(GTK_BOX(box), control_row("Outline width", outline_width));
+  gtk_box_append(
+      GTK_BOX(box),
+      paired_control_row(
+          "Colours", "Text",
+          color_control(visualizer, COLOR_NOW_PLAYING_TEXT,
+                        &visualizer->config.now_playing_text_color,
+                        "Now Playing Text Colour"),
+          "Outline",
+          color_control(visualizer, COLOR_NOW_PLAYING_OUTLINE,
+                        &visualizer->config.now_playing_outline_color,
+                        "Now Playing Outline Colour")));
+  gtk_box_append(GTK_BOX(box), section_label("Lyrics"));
+  gtk_box_append(GTK_BOX(box), lyrics);
+  gtk_box_append(GTK_BOX(box), two_lines);
+  gtk_box_append(GTK_BOX(box), control_row("Font", lyrics_font));
+  gtk_box_append(GTK_BOX(box),
+                 control_row("Outline width", lyrics_outline_width));
+  gtk_box_append(
+      GTK_BOX(box),
+      paired_control_row(
+          "Colours", "Text",
+          color_control(visualizer, COLOR_LYRICS_TEXT,
+                        &visualizer->config.lyrics_text_color,
+                        "Lyrics Text Colour"),
+          "Outline",
+          color_control(visualizer, COLOR_LYRICS_OUTLINE,
+                        &visualizer->config.lyrics_outline_color,
+                        "Lyrics Outline Colour")));
   gtk_box_append(GTK_BOX(box), section_label("Bottom Section"));
   gtk_box_append(GTK_BOX(box),
-                 paired_control_row("Sizing", "Height", height, "Font",
-                                    font_size));
+                 control_row("Height", height));
   gtk_box_append(GTK_BOX(box), control_row("Background alpha", alpha));
-  return box;
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
+  return scroller;
 }
 
 static void profile_row_activated_cb(GtkListBox *box, GtkListBoxRow *row,
@@ -1566,8 +1903,33 @@ static void show_config_window(PwvizVisualizer *visualizer) {
   gtk_window_present(GTK_WINDOW(window));
 }
 
-static void show_config_window_cb(gpointer data) {
-  show_config_window(data);
+static gboolean adjust_lyrics_offset(PwvizVisualizer *visualizer,
+                                     gint64 delta_ms) {
+  if (!visualizer || !visualizer->lyrics ||
+      !pwviz_lyrics_adjust_offset(visualizer->lyrics, delta_ms))
+    return FALSE;
+
+  g_message("Lyrics offset: %" G_GINT64_FORMAT " ms",
+            visualizer->lyrics->offset_ms);
+  queue_visualizer_draw(visualizer);
+  return TRUE;
+}
+
+static void global_shortcut_cb(PwvizGlobalShortcutAction action,
+                               gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  switch (action) {
+  case PWVIZ_GLOBAL_SHORTCUT_OPEN_SETTINGS:
+    show_config_window(visualizer);
+    break;
+  case PWVIZ_GLOBAL_SHORTCUT_LYRICS_OFFSET_BACK:
+    adjust_lyrics_offset(visualizer, -LYRICS_OFFSET_STEP_MS);
+    break;
+  case PWVIZ_GLOBAL_SHORTCUT_LYRICS_OFFSET_FORWARD:
+    adjust_lyrics_offset(visualizer, LYRICS_OFFSET_STEP_MS);
+    break;
+  }
 }
 
 static gboolean key_pressed_cb(GtkEventControllerKey *controller, guint keyval,
@@ -1585,10 +1947,19 @@ static gboolean key_pressed_cb(GtkEventControllerKey *controller, guint keyval,
     return TRUE;
   }
 
+  if (ctrl && shift && !alt && keyval == GDK_KEY_Left)
+    return adjust_lyrics_offset(data, -LYRICS_OFFSET_STEP_MS);
+  if (ctrl && shift && !alt && keyval == GDK_KEY_Right)
+    return adjust_lyrics_offset(data, LYRICS_OFFSET_STEP_MS);
+
   return FALSE;
 }
 
 static void apply_layer_position(PwvizVisualizer *visualizer) {
+  if (!visualizer || visualizer->destroying || !visualizer->window ||
+      !GTK_IS_WINDOW(visualizer->window))
+    return;
+
   gboolean top = FALSE;
   gboolean bottom = FALSE;
   gboolean left = FALSE;
@@ -1644,6 +2015,10 @@ static void apply_layer_position(PwvizVisualizer *visualizer) {
 }
 
 static void apply_window_geometry(PwvizVisualizer *visualizer) {
+  if (!visualizer || visualizer->destroying || !visualizer->window ||
+      !GTK_IS_WINDOW(visualizer->window))
+    return;
+
   gtk_window_set_default_size(GTK_WINDOW(visualizer->window),
                               visualizer->config.window_width,
                               visualizer->config.window_height);
@@ -1664,7 +2039,9 @@ static void install_transparent_window_css(void) {
   gtk_css_provider_load_from_string(
       provider,
       "window.pipewire-visualizer-window, .pipewire-visualizer-overlay { "
-      "background: transparent; }");
+      "background: transparent; } "
+      "scale.pwviz-scale, scale.pwviz-scale trough, "
+      "scale.pwviz-scale slider { min-width: 14px; min-height: 14px; }");
   gtk_style_context_add_provider_for_display(
       gdk_display_get_default(), GTK_STYLE_PROVIDER(provider),
       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -1676,11 +2053,14 @@ static void visualizer_init(PwvizVisualizer *visualizer,
                             GtkWidget *window) {
   visualizer->window = GTK_WINDOW(window);
   visualizer->audio_buffer = audio_buffer;
+  visualizer->lyrics_results = g_async_queue_new();
 
   pwviz_app_config_load(&visualizer->config);
   visualizer->config_snapshot = visualizer->config;
-  if (visualizer->config.now_playing_enabled)
+  if (visualizer->config.now_playing_enabled) {
     pwviz_now_playing_refresh(&visualizer->now_playing);
+    maybe_start_lyrics_fetch(visualizer);
+  }
   pwviz_fft_init(&visualizer->fft);
   pwviz_binner_init(&visualizer->binner);
 }
@@ -1689,9 +2069,23 @@ static void visualizer_free(PwvizVisualizer *visualizer) {
   if (!visualizer)
     return;
 
+  visualizer->destroying = TRUE;
   if (visualizer->now_playing_source)
     g_source_remove(visualizer->now_playing_source);
+  if (visualizer->config_window && GTK_IS_WINDOW(visualizer->config_window)) {
+    GtkWindow *config_window = visualizer->config_window;
+
+    visualizer->config_window = NULL;
+    gtk_window_destroy(config_window);
+  }
+  if (visualizer->lyrics_results) {
+    poll_lyrics_results(visualizer);
+    g_async_queue_unref(visualizer->lyrics_results);
+  }
+  pwviz_lyrics_free(visualizer->lyrics);
   pwviz_global_shortcut_free(visualizer->global_shortcut);
+  visualizer->drawing_area = NULL;
+  visualizer->window = NULL;
   g_free(visualizer);
 }
 
@@ -1739,7 +2133,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
   gtk_widget_add_controller(window, key_controller);
 
   visualizer->global_shortcut =
-      pwviz_global_shortcut_register(show_config_window_cb, visualizer);
+      pwviz_global_shortcut_register(global_shortcut_cb, visualizer);
   visualizer->now_playing_source =
       g_timeout_add_seconds(1, now_playing_refresh_cb, visualizer);
 

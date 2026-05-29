@@ -7,11 +7,40 @@ the samples, and draws a GTK4 spectrum bar display.
 The project is intentionally small and split into focused C modules for
 PipeWire capture, the shared audio buffer, FFT analysis, spectrum binning, and
 GTK visualization/configuration. Runtime dependencies are PipeWire, GTK4,
-gtk4-layer-shell, FFTW, and libspa.
+gtk4-layer-shell, FFTW, JSON-GLib, libsoup 3, and libspa.
 
 The window is designed for Wayland compositors that support the wlr-layer-shell
 protocol. It runs as a semitransparent overlay layer surface, stays above normal
 windows, and is fully click-through.
+
+## Features
+
+- PipeWire audio capture for system playback from browsers, music players, and
+  other desktop audio sources.
+- Real-time FFT spectrum analysis using FFTW, with WACUP-style equalization,
+  envelope, scale, logarithmic binning, peak/average bar levels, falloff, and
+  peak motion controls.
+- Classic Spectrum Analyzer inspired visuals, including frequency bar styles,
+  background modes, peak colour modes, peak motion modes, block geometry, alpha
+  controls, and built-in colour profiles.
+- Wayland layer-shell overlay window with configurable anchor, X/Y margins,
+  width, height, transparency, and click-through input behavior.
+- Configurable bar count or automatic bar count based on window width.
+- Native GTK settings window opened with `Ctrl+Shift+Alt+F12`, with organized
+  Analyzer, Layout, Style, Colour Factory, Now Playing, and Profiles pages.
+- MPRIS Now Playing metadata for player app, track title, artist, and album,
+  with configurable displayed fields, strip height, background alpha, font,
+  colour, and outline.
+- LRCLIB lyric fetching in a background worker with on-disk JSON cache under
+  `~/.cache/pipewire-visualizer/lyrics/`.
+- Synced lyric display with optional two-line karaoke-style output, retained
+  timed blank lyric lines, and `...` shown during the final 3 seconds before
+  lyrics resume after a blank gap.
+- Per-song lyric timing offset stored in the cached lyric JSON as
+  `pwvizOffsetMs`; adjust it with `Ctrl+Shift+Left` and `Ctrl+Shift+Right` in
+  250 ms steps.
+- Separate native font, text colour, outline colour, and outline width settings
+  for Now Playing metadata and lyrics.
 
 ## History
 
@@ -53,13 +82,15 @@ packaging, it finally became possible to make this version.
 - GTK4 development headers
 - gtk4-layer-shell development headers
 - FFTW single-precision development headers (`fftw3f`)
+- JSON-GLib development headers
+- libsoup 3 development headers
 - libspa development headers
 - Meson and Ninja
 - A C compiler
 
 Package names differ by distribution, but on Arch-based systems the main
 packages are typically `pipewire`, `gtk4`, `gtk4-layer-shell`, `fftw`, `meson`,
-and `ninja`.
+`json-glib`, `libsoup3`, and `ninja`.
 
 ## Install From AUR
 
@@ -133,13 +164,28 @@ original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,
 
 The Now Playing section uses MPRIS metadata from the session bus when a player
 provides it. It can show the player app, track title, artist, and album in a
-bottom strip, with configurable visibility, height, font size, and background
-alpha.
+bottom strip, with configurable visibility, height, metadata font family,
+style, size, metadata colour, outline colour, outline width, and background
+alpha. When lyrics are enabled, the app fetches synced or plain
+lyrics from LRCLIB in a background worker, caches responses on disk, and
+displays the current line plus an optional next line like a karaoke view. Lyrics
+retain timed blank lines, show `...` during the final 3 seconds before lyrics
+resume after a blank gap, and have separate native font, colour, outline colour,
+and outline width settings.
+Use `Ctrl+Shift+Left` and `Ctrl+Shift+Right` while a song is playing to adjust
+that song's lyric timing offset in 250 ms steps. The offset is stored in that
+song's cached lyric JSON as `pwvizOffsetMs`.
 
 Settings are saved to:
 
 ```text
 ~/.config/pipewire-visualizer/config.ini
+```
+
+Lyrics responses are cached to:
+
+```text
+~/.cache/pipewire-visualizer/lyrics/
 ```
 
 ## Disclaimer

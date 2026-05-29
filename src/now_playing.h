@@ -4,6 +4,9 @@
 
 typedef struct {
   gboolean available;
+  gboolean playing;
+  gint64 duration_us;
+  gint64 position_us;
   char app[128];
   char title[256];
   char artist[256];

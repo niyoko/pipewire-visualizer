@@ -76,7 +76,6 @@ typedef struct {
   int x_margin;
   int y_margin;
   int now_playing_height;
-  int now_playing_font_size;
   int falloff_rate;
   int peak_change_rate;
   float peak_fall_per_frame;
@@ -86,17 +85,27 @@ typedef struct {
   double background_alpha;
   double bar_alpha;
   double now_playing_alpha;
+  double now_playing_outline_width;
+  double lyrics_outline_width;
   gboolean fft_equalize;
   gboolean now_playing_enabled;
   gboolean now_playing_show_app;
   gboolean now_playing_show_title;
   gboolean now_playing_show_artist;
   gboolean now_playing_show_album;
+  gboolean lyrics_enabled;
+  gboolean lyrics_two_lines;
   GdkRGBA low_color;
   GdkRGBA high_color;
   GdkRGBA peak_color;
   GdkRGBA background_color;
+  GdkRGBA now_playing_text_color;
+  GdkRGBA now_playing_outline_color;
+  GdkRGBA lyrics_text_color;
+  GdkRGBA lyrics_outline_color;
   char profile_name[64];
+  char now_playing_font[128];
+  char lyrics_font[128];
 } PwvizAppConfig;
 
 void pwviz_app_config_set_defaults(PwvizAppConfig *config);

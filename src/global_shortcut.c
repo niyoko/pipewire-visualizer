@@ -6,7 +6,21 @@
 #define PORTAL_PATH "/org/freedesktop/portal/desktop"
 #define PORTAL_GLOBAL_SHORTCUTS "org.freedesktop.portal.GlobalShortcuts"
 #define PORTAL_REQUEST "org.freedesktop.portal.Request"
-#define SHORTCUT_ID "open_settings_ctrl_shift_alt_f12"
+typedef struct {
+  const char *id;
+  const char *description;
+  const char *preferred_trigger;
+  PwvizGlobalShortcutAction action;
+} ShortcutDefinition;
+
+static const ShortcutDefinition SHORTCUTS[] = {
+    {"open_settings_ctrl_shift_alt_f12", "Open pipewire-visualizer settings",
+     "CTRL+SHIFT+ALT+F12", PWVIZ_GLOBAL_SHORTCUT_OPEN_SETTINGS},
+    {"lyrics_offset_ctrl_shift_left", "Move current lyrics earlier",
+     "CTRL+SHIFT+Left", PWVIZ_GLOBAL_SHORTCUT_LYRICS_OFFSET_BACK},
+    {"lyrics_offset_ctrl_shift_right", "Move current lyrics later",
+     "CTRL+SHIFT+Right", PWVIZ_GLOBAL_SHORTCUT_LYRICS_OFFSET_FORWARD},
+};
 
 struct PwvizGlobalShortcut {
   GDBusConnection *connection;
@@ -21,6 +35,15 @@ struct PwvizGlobalShortcut {
 
 static void subscribe_activated(PwvizGlobalShortcut *shortcut);
 static void bind_shortcut(PwvizGlobalShortcut *shortcut);
+
+static const ShortcutDefinition *shortcut_for_id(const char *id) {
+  for (guint i = 0; i < G_N_ELEMENTS(SHORTCUTS); i++) {
+    if (g_strcmp0(id, SHORTCUTS[i].id) == 0)
+      return &SHORTCUTS[i];
+  }
+
+  return NULL;
+}
 
 static char *token(const char *prefix) {
   return g_strdup_printf("%s_%u", prefix, g_random_int());
@@ -117,8 +140,9 @@ static void activated_cb(GDBusConnection *connection, const char *sender_name,
 
   g_variant_get(parameters, "(&o&st@a{sv})", &session_handle, &shortcut_id,
                 &timestamp, &options);
-  if (g_strcmp0(shortcut_id, SHORTCUT_ID) == 0 && shortcut->callback)
-    shortcut->callback(shortcut->user_data);
+  const ShortcutDefinition *definition = shortcut_for_id(shortcut_id);
+  if (definition && shortcut->callback)
+    shortcut->callback(definition->action, shortcut->user_data);
   g_variant_unref(options);
 }
 
@@ -134,22 +158,23 @@ static void subscribe_activated(PwvizGlobalShortcut *shortcut) {
 
 static void bind_shortcut(PwvizGlobalShortcut *shortcut) {
   GVariantBuilder shortcuts;
-  GVariantBuilder shortcut_properties;
   GVariantBuilder options;
   g_autofree char *handle_token = token("bind");
   g_autoptr(GError) error = NULL;
   GVariant *reply = NULL;
 
-  g_variant_builder_init(&shortcut_properties, G_VARIANT_TYPE("a{sv}"));
-  g_variant_builder_add(&shortcut_properties, "{sv}", "description",
-                        g_variant_new_string(
-                            "Open pipewire-visualizer settings"));
-  g_variant_builder_add(&shortcut_properties, "{sv}", "preferred_trigger",
-                        g_variant_new_string("CTRL+SHIFT+ALT+F12"));
-
   g_variant_builder_init(&shortcuts, G_VARIANT_TYPE("a(sa{sv})"));
-  g_variant_builder_add(&shortcuts, "(sa{sv})", SHORTCUT_ID,
-                        &shortcut_properties);
+  for (guint i = 0; i < G_N_ELEMENTS(SHORTCUTS); i++) {
+    GVariantBuilder shortcut_properties;
+
+    g_variant_builder_init(&shortcut_properties, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&shortcut_properties, "{sv}", "description",
+                          g_variant_new_string(SHORTCUTS[i].description));
+    g_variant_builder_add(&shortcut_properties, "{sv}", "preferred_trigger",
+                          g_variant_new_string(SHORTCUTS[i].preferred_trigger));
+    g_variant_builder_add(&shortcuts, "(sa{sv})", SHORTCUTS[i].id,
+                          &shortcut_properties);
+  }
 
   g_variant_builder_init(&options, G_VARIANT_TYPE("a{sv}"));
   g_variant_builder_add(&options, "{sv}", "handle_token",
