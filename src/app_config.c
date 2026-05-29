@@ -102,22 +102,57 @@ static PwvizWindowAnchor anchor_from_string(const char *value) {
   return PWVIZ_ANCHOR_BOTTOM_RIGHT;
 }
 
+static void apply_classic_profile_settings(PwvizAppConfig *config,
+                                           int falloff_rate,
+                                           int peak_change_rate, int bar_width,
+                                           int x_spacing, int y_spacing,
+                                           int fft_scale) {
+  config->level_mode = PWVIZ_LEVEL_AVERAGE;
+  config->falloff_rate = falloff_rate;
+  config->peak_change_rate = peak_change_rate;
+  config->bar_width = bar_width;
+  config->x_spacing = x_spacing;
+  config->block_gap = y_spacing;
+  config->fft_equalize = TRUE;
+  config->fft_envelope = 0.2f;
+  config->fft_scale = fft_scale / 100.0f;
+}
+
 void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->analyzer_mode = PWVIZ_ANALYZER_BARS;
+  config->level_mode = PWVIZ_LEVEL_AVERAGE;
+  config->bar_style = PWVIZ_BAR_STYLE_CLASSIC;
+  config->background_mode = PWVIZ_BACKGROUND_SOLID;
+  config->peak_color_mode = PWVIZ_PEAK_COLOR_LEVEL_FADE;
+  config->peak_motion = PWVIZ_PEAK_MOTION_FALL;
   config->window_anchor = PWVIZ_ANCHOR_BOTTOM_RIGHT;
   config->bar_count = PWVIZ_BAR_COUNT;
+  config->auto_bar_count = FALSE;
+  config->bar_width = 3;
+  config->x_spacing = 1;
   config->block_height = 4;
   config->block_gap = 2;
   config->window_width = 900;
   config->window_height = 240;
   config->x_margin = 0;
   config->y_margin = 0;
-  config->peak_hold_frames = PWVIZ_PEAK_HOLD_FRAMES;
+  config->now_playing_height = 34;
+  config->now_playing_font_size = 13;
+  config->falloff_rate = 12;
+  config->peak_change_rate = 80;
   config->peak_fall_per_frame = PWVIZ_PEAK_FALL_PER_FRAME;
   config->display_threshold = 0.08f;
+  config->fft_envelope = 0.2f;
+  config->fft_scale = 2.0f;
   config->background_alpha = 0.0;
   config->bar_alpha = 0.35;
-  config->show_border = TRUE;
+  config->now_playing_alpha = 0.72;
+  config->fft_equalize = TRUE;
+  config->now_playing_enabled = TRUE;
+  config->now_playing_show_app = TRUE;
+  config->now_playing_show_title = TRUE;
+  config->now_playing_show_artist = TRUE;
+  config->now_playing_show_album = TRUE;
   set_rgba(&config->low_color, 0.45, 0.0, 0.0, 1.0);
   set_rgba(&config->high_color, 1.0, 0.86, 0.0, 1.0);
   set_rgba(&config->peak_color, 1.0, 0.92, 0.20, 1.0);
@@ -129,42 +164,52 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
 void pwviz_app_config_apply_profile(PwvizAppConfig *config,
                                     const char *profile_name) {
   if (g_strcmp0(profile_name, "Classic") == 0) {
+    apply_classic_profile_settings(config, 12, 80, 3, 1, 2, 200);
     set_rgba(&config->low_color, 0.00, 0.25, 0.75, 1.0);
     set_rgba(&config->high_color, 0.00, 1.00, 0.74, 1.0);
     set_rgba(&config->peak_color, 0.42, 0.00, 0.79, 1.0);
   } else if (g_strcmp0(profile_name, "Classic LED") == 0) {
+    apply_classic_profile_settings(config, 12, 100, 1, 1, 2, 220);
     set_rgba(&config->low_color, 0.05, 0.20, 0.00, 1.0);
     set_rgba(&config->high_color, 0.50, 1.00, 0.10, 1.0);
     set_rgba(&config->peak_color, 0.90, 1.00, 0.30, 1.0);
   } else if (g_strcmp0(profile_name, "Blue Flames") == 0) {
+    apply_classic_profile_settings(config, 12, 60, 2, 0, 1, 200);
     set_rgba(&config->low_color, 0.00, 0.10, 0.45, 1.0);
     set_rgba(&config->high_color, 0.00, 0.95, 1.00, 1.0);
     set_rgba(&config->peak_color, 0.58, 0.70, 1.00, 1.0);
   } else if (g_strcmp0(profile_name, "Blue on Grey") == 0) {
+    apply_classic_profile_settings(config, 12, 80, 3, 0, 1, 200);
     set_rgba(&config->low_color, 0.08, 0.10, 0.15, 1.0);
     set_rgba(&config->high_color, 0.30, 0.62, 1.00, 1.0);
     set_rgba(&config->peak_color, 0.75, 0.84, 1.00, 1.0);
   } else if (g_strcmp0(profile_name, "Flames") == 0) {
+    apply_classic_profile_settings(config, 14, 60, 2, 0, 1, 180);
     set_rgba(&config->low_color, 0.40, 0.00, 0.00, 1.0);
     set_rgba(&config->high_color, 1.00, 0.62, 0.00, 1.0);
     set_rgba(&config->peak_color, 1.00, 0.95, 0.20, 1.0);
   } else if (g_strcmp0(profile_name, "LCD") == 0) {
+    apply_classic_profile_settings(config, 12, 80, 3, 1, 1, 200);
     set_rgba(&config->low_color, 0.14, 0.20, 0.12, 1.0);
     set_rgba(&config->high_color, 0.56, 0.72, 0.42, 1.0);
     set_rgba(&config->peak_color, 0.82, 0.92, 0.62, 1.0);
   } else if (g_strcmp0(profile_name, "Northern Lights") == 0) {
+    apply_classic_profile_settings(config, 15, 50, 1, 0, 1, 190);
     set_rgba(&config->low_color, 0.00, 0.12, 0.20, 1.0);
     set_rgba(&config->high_color, 0.00, 0.96, 0.62, 1.0);
     set_rgba(&config->peak_color, 0.62, 0.20, 1.00, 1.0);
   } else if (g_strcmp0(profile_name, "Purple Neon") == 0) {
+    apply_classic_profile_settings(config, 13, 87, 2, 0, 1, 200);
     set_rgba(&config->low_color, 0.24, 0.00, 0.42, 1.0);
     set_rgba(&config->high_color, 0.78, 0.00, 1.00, 1.0);
     set_rgba(&config->peak_color, 1.00, 0.45, 1.00, 1.0);
   } else if (g_strcmp0(profile_name, "Lavender Pink Tips") == 0) {
+    apply_classic_profile_settings(config, 12, 80, 2, 0, 1, 200);
     set_rgba(&config->low_color, 0.35, 0.18, 0.62, 1.0);
     set_rgba(&config->high_color, 0.95, 0.62, 1.00, 1.0);
     set_rgba(&config->peak_color, 1.00, 0.32, 0.72, 1.0);
   } else {
+    apply_classic_profile_settings(config, 12, 80, 3, 1, 2, 200);
     set_rgba(&config->low_color, 0.45, 0.0, 0.0, 1.0);
     set_rgba(&config->high_color, 1.0, 0.86, 0.0, 1.0);
     set_rgba(&config->peak_color, 1.0, 0.92, 0.20, 1.0);
@@ -190,15 +235,36 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
     config->analyzer_mode =
         CLAMP(g_key_file_get_integer(key_file, "Analyzer", "mode", NULL),
               PWVIZ_ANALYZER_BARS, PWVIZ_ANALYZER_FLASH);
+  if (has_key(key_file, "Analyzer", "level_mode"))
+    config->level_mode =
+        CLAMP(g_key_file_get_integer(key_file, "Analyzer", "level_mode", NULL),
+              PWVIZ_LEVEL_PEAK, PWVIZ_LEVEL_AVERAGE);
+  if (has_key(key_file, "Analyzer", "peak_motion"))
+    config->peak_motion =
+        CLAMP(g_key_file_get_integer(key_file, "Analyzer", "peak_motion", NULL),
+              PWVIZ_PEAK_MOTION_NORMAL, PWVIZ_PEAK_MOTION_SPARKS);
   if (has_key(key_file, "Analyzer", "bar_count"))
     config->bar_count =
         CLAMP(g_key_file_get_integer(key_file, "Analyzer", "bar_count", NULL),
               8, PWVIZ_BAR_COUNT);
-  if (has_key(key_file, "Analyzer", "peak_hold_frames"))
-    config->peak_hold_frames =
+  if (has_key(key_file, "Analyzer", "auto_bar_count"))
+    config->auto_bar_count =
+        g_key_file_get_boolean(key_file, "Analyzer", "auto_bar_count", NULL);
+  if (has_key(key_file, "Analyzer", "falloff_rate"))
+    config->falloff_rate =
+        CLAMP(g_key_file_get_integer(key_file, "Analyzer", "falloff_rate",
+                                     NULL),
+              0, 75);
+  if (has_key(key_file, "Analyzer", "peak_change_rate"))
+    config->peak_change_rate =
+        CLAMP(g_key_file_get_integer(key_file, "Analyzer", "peak_change_rate",
+                                     NULL),
+              0, 255);
+  else if (has_key(key_file, "Analyzer", "peak_hold_frames"))
+    config->peak_change_rate =
         CLAMP(g_key_file_get_integer(key_file, "Analyzer", "peak_hold_frames",
                                      NULL),
-              0, 120);
+              0, 255);
   if (has_key(key_file, "Analyzer", "peak_fall_per_frame"))
     config->peak_fall_per_frame =
         CLAMP(g_key_file_get_double(key_file, "Analyzer", "peak_fall_per_frame",
@@ -209,6 +275,18 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
         CLAMP(g_key_file_get_double(key_file, "Analyzer", "display_threshold",
                                     NULL),
               0.0, 0.5);
+  if (has_key(key_file, "Analyzer", "fft_equalize"))
+    config->fft_equalize =
+        g_key_file_get_boolean(key_file, "Analyzer", "fft_equalize", NULL);
+  if (has_key(key_file, "Analyzer", "fft_envelope"))
+    config->fft_envelope =
+        CLAMP(g_key_file_get_double(key_file, "Analyzer", "fft_envelope",
+                                    NULL),
+              0.0, 5.0);
+  if (has_key(key_file, "Analyzer", "fft_scale"))
+    config->fft_scale =
+        CLAMP(g_key_file_get_double(key_file, "Analyzer", "fft_scale", NULL),
+              0.1, 25.0);
 
   if (has_key(key_file, "Window", "anchor")) {
     char *anchor = g_key_file_get_string(key_file, "Window", "anchor", NULL);
@@ -232,14 +310,65 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
         CLAMP(g_key_file_get_integer(key_file, "Window", "y_margin", NULL), 0,
               10000);
 
+  if (has_key(key_file, "Now Playing", "enabled"))
+    config->now_playing_enabled =
+        g_key_file_get_boolean(key_file, "Now Playing", "enabled", NULL);
+  if (has_key(key_file, "Now Playing", "height"))
+    config->now_playing_height =
+        CLAMP(g_key_file_get_integer(key_file, "Now Playing", "height", NULL),
+              0, 160);
+  if (has_key(key_file, "Now Playing", "font_size"))
+    config->now_playing_font_size =
+        CLAMP(g_key_file_get_integer(key_file, "Now Playing", "font_size",
+                                     NULL),
+              8, 32);
+  if (has_key(key_file, "Now Playing", "alpha"))
+    config->now_playing_alpha =
+        CLAMP(g_key_file_get_double(key_file, "Now Playing", "alpha", NULL),
+              0.0, 1.0);
+  if (has_key(key_file, "Now Playing", "show_app"))
+    config->now_playing_show_app =
+        g_key_file_get_boolean(key_file, "Now Playing", "show_app", NULL);
+  if (has_key(key_file, "Now Playing", "show_title"))
+    config->now_playing_show_title =
+        g_key_file_get_boolean(key_file, "Now Playing", "show_title", NULL);
+  if (has_key(key_file, "Now Playing", "show_artist"))
+    config->now_playing_show_artist =
+        g_key_file_get_boolean(key_file, "Now Playing", "show_artist", NULL);
+  if (has_key(key_file, "Now Playing", "show_album"))
+    config->now_playing_show_album =
+        g_key_file_get_boolean(key_file, "Now Playing", "show_album", NULL);
+
   if (has_key(key_file, "Style", "block_height"))
     config->block_height =
         CLAMP(g_key_file_get_integer(key_file, "Style", "block_height", NULL),
               1, 16);
+  if (has_key(key_file, "Style", "bar_style"))
+    config->bar_style =
+        CLAMP(g_key_file_get_integer(key_file, "Style", "bar_style", NULL),
+              PWVIZ_BAR_STYLE_CLASSIC, PWVIZ_BAR_STYLE_RANDOM);
+  if (has_key(key_file, "Style", "background_mode"))
+    config->background_mode =
+        CLAMP(g_key_file_get_integer(key_file, "Style", "background_mode",
+                                     NULL),
+              PWVIZ_BACKGROUND_BLACK, PWVIZ_BACKGROUND_FLASH_GRID);
+  if (has_key(key_file, "Style", "peak_color_mode"))
+    config->peak_color_mode =
+        CLAMP(g_key_file_get_integer(key_file, "Style", "peak_color_mode",
+                                     NULL),
+              PWVIZ_PEAK_COLOR_FADE, PWVIZ_PEAK_COLOR_LEVEL_FADE);
   if (has_key(key_file, "Style", "block_gap"))
     config->block_gap =
         CLAMP(g_key_file_get_integer(key_file, "Style", "block_gap", NULL), 0,
               12);
+  if (has_key(key_file, "Style", "bar_width"))
+    config->bar_width =
+        CLAMP(g_key_file_get_integer(key_file, "Style", "bar_width", NULL), 1,
+              50);
+  if (has_key(key_file, "Style", "x_spacing"))
+    config->x_spacing =
+        CLAMP(g_key_file_get_integer(key_file, "Style", "x_spacing", NULL), 0,
+              10);
   if (has_key(key_file, "Style", "background_alpha"))
     config->background_alpha =
         CLAMP(
@@ -249,10 +378,6 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
     config->bar_alpha =
         CLAMP(g_key_file_get_double(key_file, "Style", "bar_alpha", NULL), 0.0,
               1.0);
-  if (has_key(key_file, "Style", "show_border"))
-    config->show_border =
-        g_key_file_get_boolean(key_file, "Style", "show_border", NULL);
-
   get_color(key_file, "Colour Factory", "low_color", &config->low_color);
   get_color(key_file, "Colour Factory", "high_color", &config->high_color);
   get_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
@@ -279,14 +404,27 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
 
   g_key_file_set_integer(key_file, "Analyzer", "mode",
                          config->analyzer_mode);
+  g_key_file_set_integer(key_file, "Analyzer", "level_mode",
+                         config->level_mode);
+  g_key_file_set_integer(key_file, "Analyzer", "peak_motion",
+                         config->peak_motion);
   g_key_file_set_integer(key_file, "Analyzer", "bar_count",
                          config->bar_count);
-  g_key_file_set_integer(key_file, "Analyzer", "peak_hold_frames",
-                         config->peak_hold_frames);
+  g_key_file_set_boolean(key_file, "Analyzer", "auto_bar_count",
+                         config->auto_bar_count);
+  g_key_file_set_integer(key_file, "Analyzer", "falloff_rate",
+                         config->falloff_rate);
+  g_key_file_set_integer(key_file, "Analyzer", "peak_change_rate",
+                         config->peak_change_rate);
   g_key_file_set_double(key_file, "Analyzer", "peak_fall_per_frame",
                         config->peak_fall_per_frame);
   g_key_file_set_double(key_file, "Analyzer", "display_threshold",
                         config->display_threshold);
+  g_key_file_set_boolean(key_file, "Analyzer", "fft_equalize",
+                         config->fft_equalize);
+  g_key_file_set_double(key_file, "Analyzer", "fft_envelope",
+                        config->fft_envelope);
+  g_key_file_set_double(key_file, "Analyzer", "fft_scale", config->fft_scale);
 
   g_key_file_set_string(key_file, "Window", "anchor",
                         anchor_to_string(config->window_anchor));
@@ -295,15 +433,36 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
   g_key_file_set_integer(key_file, "Window", "x_margin", config->x_margin);
   g_key_file_set_integer(key_file, "Window", "y_margin", config->y_margin);
 
+  g_key_file_set_boolean(key_file, "Now Playing", "enabled",
+                         config->now_playing_enabled);
+  g_key_file_set_integer(key_file, "Now Playing", "height",
+                         config->now_playing_height);
+  g_key_file_set_integer(key_file, "Now Playing", "font_size",
+                         config->now_playing_font_size);
+  g_key_file_set_double(key_file, "Now Playing", "alpha",
+                        config->now_playing_alpha);
+  g_key_file_set_boolean(key_file, "Now Playing", "show_app",
+                         config->now_playing_show_app);
+  g_key_file_set_boolean(key_file, "Now Playing", "show_title",
+                         config->now_playing_show_title);
+  g_key_file_set_boolean(key_file, "Now Playing", "show_artist",
+                         config->now_playing_show_artist);
+  g_key_file_set_boolean(key_file, "Now Playing", "show_album",
+                         config->now_playing_show_album);
+
   g_key_file_set_integer(key_file, "Style", "block_height",
                          config->block_height);
+  g_key_file_set_integer(key_file, "Style", "bar_style", config->bar_style);
+  g_key_file_set_integer(key_file, "Style", "background_mode",
+                         config->background_mode);
+  g_key_file_set_integer(key_file, "Style", "peak_color_mode",
+                         config->peak_color_mode);
   g_key_file_set_integer(key_file, "Style", "block_gap", config->block_gap);
+  g_key_file_set_integer(key_file, "Style", "bar_width", config->bar_width);
+  g_key_file_set_integer(key_file, "Style", "x_spacing", config->x_spacing);
   g_key_file_set_double(key_file, "Style", "background_alpha",
                         config->background_alpha);
   g_key_file_set_double(key_file, "Style", "bar_alpha", config->bar_alpha);
-  g_key_file_set_boolean(key_file, "Style", "show_border",
-                         config->show_border);
-
   set_color(key_file, "Colour Factory", "low_color", &config->low_color);
   set_color(key_file, "Colour Factory", "high_color", &config->high_color);
   set_color(key_file, "Colour Factory", "peak_color", &config->peak_color);

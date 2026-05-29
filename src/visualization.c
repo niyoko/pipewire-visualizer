@@ -5,10 +5,12 @@
 #include "config.h"
 #include "fft.h"
 #include "global_shortcut.h"
+#include "now_playing.h"
 
 #include <gtk/gtk.h>
 #include <gtk4-layer-shell.h>
 #include <math.h>
+#include <pango/pangocairo.h>
 
 typedef struct {
   GtkWindow *window;
@@ -16,6 +18,7 @@ typedef struct {
   GtkWidget *drawing_area;
   PwvizAudioBuffer *audio_buffer;
   PwvizGlobalShortcut *global_shortcut;
+  PwvizNowPlaying now_playing;
   PwvizAppConfig config;
   PwvizAppConfig config_snapshot;
   PwvizFft fft;
@@ -26,6 +29,7 @@ typedef struct {
   float bars[PWVIZ_BAR_COUNT];
   float peak_caps[PWVIZ_BAR_COUNT];
   int peak_holds[PWVIZ_BAR_COUNT];
+  guint now_playing_source;
   int width;
   int height;
 } PwvizVisualizer;
@@ -39,13 +43,24 @@ typedef enum {
 
 enum {
   INACTIVE_BAR_ALPHA = 0,
-  BORDER_ALPHA = 0,
 };
 
 typedef struct {
   PwvizWindowAnchor anchor;
   const char *label;
 } AnchorOption;
+
+typedef struct {
+  int value;
+  const char *label;
+} RadioOption;
+
+typedef enum {
+  CLASSIC_OPTION_BAR_STYLE,
+  CLASSIC_OPTION_BACKGROUND,
+  CLASSIC_OPTION_PEAK_COLOR,
+  CLASSIC_OPTION_PEAK_MOTION,
+} ClassicOptionTarget;
 
 typedef struct {
   PwvizVisualizer *visualizer;
@@ -65,6 +80,38 @@ static const AnchorOption ANCHOR_OPTIONS[] = {
     {PWVIZ_ANCHOR_BOTTOM_LEFT, "Bottom left"},
     {PWVIZ_ANCHOR_BOTTOM, "Bottom"},
     {PWVIZ_ANCHOR_BOTTOM_RIGHT, "Bottom right"},
+};
+
+static const RadioOption BAR_STYLE_OPTIONS[] = {
+    {PWVIZ_BAR_STYLE_CLASSIC, "Classic"},
+    {PWVIZ_BAR_STYLE_SOFT_FLAME, "Soft Flame"},
+    {PWVIZ_BAR_STYLE_FIRE, "Fire"},
+    {PWVIZ_BAR_STYLE_SOLID_LINES, "Solid Lines"},
+    {PWVIZ_BAR_STYLE_WINAMP_FIRE, "Winamp Fire"},
+    {PWVIZ_BAR_STYLE_RANDOM, "Random"},
+};
+
+static const RadioOption BACKGROUND_OPTIONS[] = {
+    {PWVIZ_BACKGROUND_BLACK, "Black"},
+    {PWVIZ_BACKGROUND_GRID, "Grid"},
+    {PWVIZ_BACKGROUND_SOLID, "Solid Colour"},
+    {PWVIZ_BACKGROUND_FLASH, "Flash"},
+    {PWVIZ_BACKGROUND_FLASH_GRID, "Flash Grid"},
+};
+
+static const RadioOption PEAK_COLOR_OPTIONS[] = {
+    {PWVIZ_PEAK_COLOR_FADE, "Fade"},
+    {PWVIZ_PEAK_COLOR_LEVEL, "Level"},
+    {PWVIZ_PEAK_COLOR_LEVEL_FADE, "Level & Fade"},
+};
+
+static const RadioOption PEAK_MOTION_OPTIONS[] = {
+    {PWVIZ_PEAK_MOTION_NORMAL, "Normal"},
+    {PWVIZ_PEAK_MOTION_FALL, "Fall"},
+    {PWVIZ_PEAK_MOTION_RISE, "Rise"},
+    {PWVIZ_PEAK_MOTION_FALL_RISE, "Fall & Rise"},
+    {PWVIZ_PEAK_MOTION_RISE_FALL, "Rise Fall"},
+    {PWVIZ_PEAK_MOTION_SPARKS, "Sparks"},
 };
 
 static guint anchor_index_for_anchor(PwvizWindowAnchor anchor) {
@@ -88,6 +135,333 @@ static double color_alpha(double config_alpha, double color_alpha) {
   return CLAMP(config_alpha, 0.0, 1.0) * CLAMP(color_alpha, 0.0, 1.0);
 }
 
+static double average_bar_level(PwvizVisualizer *visualizer, int bar_count) {
+  double total = 0.0;
+
+  if (bar_count <= 0)
+    return 0.0;
+
+  for (int i = 0; i < bar_count; i++)
+    total += visualizer->bars[i];
+
+  return CLAMP(total / bar_count, 0.0, 1.0);
+}
+
+static void style_color(PwvizVisualizer *visualizer, int bar_index,
+                        double level, double *red, double *green,
+                        double *blue, double *source_alpha) {
+  switch (visualizer->config.bar_style) {
+  case PWVIZ_BAR_STYLE_SOFT_FLAME:
+    *red = mix(0.72, 1.00, level);
+    *green = mix(0.05, 0.58, level);
+    *blue = mix(0.02, 0.16, level);
+    *source_alpha = mix(0.82, 1.0, level);
+    break;
+  case PWVIZ_BAR_STYLE_FIRE:
+    *red = mix(0.55, 1.00, level);
+    *green = mix(0.00, 0.82, level);
+    *blue = mix(0.00, 0.04, level);
+    *source_alpha = 1.0;
+    break;
+  case PWVIZ_BAR_STYLE_SOLID_LINES:
+    if (level > 0.72) {
+      *red = 1.0;
+      *green = 0.08;
+      *blue = 0.02;
+    } else if (level > 0.42) {
+      *red = 1.0;
+      *green = 0.86;
+      *blue = 0.0;
+    } else {
+      *red = 0.04;
+      *green = 0.86;
+      *blue = 0.12;
+    }
+    *source_alpha = 1.0;
+    break;
+  case PWVIZ_BAR_STYLE_WINAMP_FIRE:
+    *red = 1.0;
+    *green = pow(level, 0.72);
+    *blue = level > 0.86 ? mix(0.0, 0.18, (level - 0.86) / 0.14) : 0.0;
+    *source_alpha = 1.0;
+    break;
+  case PWVIZ_BAR_STYLE_RANDOM:
+    *red = 0.50 + 0.50 * sin(bar_index * 0.73 + 0.2);
+    *green = 0.50 + 0.50 * sin(bar_index * 1.13 + 2.0);
+    *blue = 0.50 + 0.50 * sin(bar_index * 0.97 + 4.0);
+    *red = mix(*red * 0.55, *red, level);
+    *green = mix(*green * 0.55, *green, level);
+    *blue = mix(*blue * 0.55, *blue, level);
+    *source_alpha = 1.0;
+    break;
+  case PWVIZ_BAR_STYLE_CLASSIC:
+  default:
+    *red = mix(visualizer->config.low_color.red,
+               visualizer->config.high_color.red, level);
+    *green = mix(visualizer->config.low_color.green,
+                 visualizer->config.high_color.green, level);
+    *blue = mix(visualizer->config.low_color.blue,
+                visualizer->config.high_color.blue, level);
+    *source_alpha = mix(visualizer->config.low_color.alpha,
+                        visualizer->config.high_color.alpha, level);
+    break;
+  }
+}
+
+static void draw_grid(cairo_t *cr, int width, int height, double alpha) {
+  if (alpha <= 0.0)
+    return;
+
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, alpha);
+  cairo_set_line_width(cr, 1.0);
+  for (int x = 0; x <= width; x += 24) {
+    cairo_move_to(cr, x + 0.5, 0);
+    cairo_line_to(cr, x + 0.5, height);
+  }
+  for (int y = 0; y <= height; y += 24) {
+    cairo_move_to(cr, 0, y + 0.5);
+    cairo_line_to(cr, width, y + 0.5);
+  }
+  cairo_stroke(cr);
+}
+
+static void draw_background(PwvizVisualizer *visualizer, cairo_t *cr,
+                            int width, int height, int bar_count) {
+  double red = visualizer->config.background_color.red;
+  double green = visualizer->config.background_color.green;
+  double blue = visualizer->config.background_color.blue;
+  double alpha = color_alpha(visualizer->config.background_alpha,
+                             visualizer->config.background_color.alpha);
+  double flash = average_bar_level(visualizer, bar_count);
+  gboolean grid = FALSE;
+
+  switch (visualizer->config.background_mode) {
+  case PWVIZ_BACKGROUND_BLACK:
+    red = 0.0;
+    green = 0.0;
+    blue = 0.0;
+    break;
+  case PWVIZ_BACKGROUND_GRID:
+    grid = TRUE;
+    break;
+  case PWVIZ_BACKGROUND_FLASH:
+    alpha = MAX(alpha, flash * 0.28);
+    red = mix(red, visualizer->config.high_color.red, flash);
+    green = mix(green, visualizer->config.high_color.green, flash);
+    blue = mix(blue, visualizer->config.high_color.blue, flash);
+    break;
+  case PWVIZ_BACKGROUND_FLASH_GRID:
+    grid = TRUE;
+    alpha = MAX(alpha, flash * 0.24);
+    red = mix(red, visualizer->config.high_color.red, flash);
+    green = mix(green, visualizer->config.high_color.green, flash);
+    blue = mix(blue, visualizer->config.high_color.blue, flash);
+    break;
+  case PWVIZ_BACKGROUND_SOLID:
+  default:
+    break;
+  }
+
+  cairo_set_source_rgba(cr, red, green, blue, alpha);
+  cairo_paint(cr);
+  draw_grid(cr, width, height, grid ? MAX(0.06, alpha * 0.55) : 0.0);
+}
+
+static int effective_bar_count(PwvizVisualizer *visualizer, int width) {
+  if (visualizer->config.auto_bar_count) {
+    int total_width = MAX(1, visualizer->config.bar_width +
+                                 visualizer->config.x_spacing);
+    return CLAMP((width + visualizer->config.x_spacing) / total_width, 1,
+                 PWVIZ_BAR_COUNT);
+  }
+
+  return CLAMP(visualizer->config.bar_count, 1, PWVIZ_BAR_COUNT);
+}
+
+static int now_playing_height(PwvizVisualizer *visualizer) {
+  if (!visualizer->config.now_playing_enabled ||
+      !visualizer->now_playing.available)
+    return 0;
+
+  return CLAMP(visualizer->config.now_playing_height, 0,
+               visualizer->height / 2);
+}
+
+static void update_peak_cap(PwvizVisualizer *visualizer, int index) {
+  float current = visualizer->bars[index];
+  float speed = visualizer->config.peak_fall_per_frame;
+  float cap = visualizer->peak_caps[index];
+
+  switch (visualizer->config.peak_motion) {
+  case PWVIZ_PEAK_MOTION_NORMAL:
+    visualizer->peak_caps[index] = current;
+    visualizer->peak_holds[index] = 0;
+    return;
+  case PWVIZ_PEAK_MOTION_RISE:
+    if (current > cap) {
+      visualizer->peak_holds[index] = visualizer->config.peak_change_rate;
+      cap = current;
+    } else if (visualizer->peak_holds[index] > 0) {
+      visualizer->peak_holds[index]--;
+      cap = MIN(1.0f, cap + speed * 0.65f);
+    } else {
+      cap = MAX(current, cap - speed);
+    }
+    break;
+  case PWVIZ_PEAK_MOTION_FALL_RISE:
+    if (current > cap) {
+      visualizer->peak_holds[index] = visualizer->config.peak_change_rate;
+      cap = current;
+    } else if (visualizer->peak_holds[index] > 0) {
+      visualizer->peak_holds[index]--;
+    } else if (cap > 0.18f) {
+      cap = MAX(0.18f, cap - speed);
+    } else {
+      cap = MIN(current, cap + speed * 0.75f);
+    }
+    break;
+  case PWVIZ_PEAK_MOTION_RISE_FALL:
+    if (current > cap) {
+      visualizer->peak_holds[index] = visualizer->config.peak_change_rate;
+      cap = current;
+    } else if (visualizer->peak_holds[index] > 0) {
+      visualizer->peak_holds[index]--;
+      cap = MIN(1.0f, cap + speed * 0.45f);
+    } else {
+      cap = MAX(0.0f, cap - speed * 1.35f);
+    }
+    break;
+  case PWVIZ_PEAK_MOTION_SPARKS:
+    if (current > cap) {
+      float spark = (float)(((index * 37 + visualizer->peak_holds[index] * 11) %
+                             17) /
+                            255.0);
+      cap = MIN(1.0f, current + 0.04f + spark);
+      visualizer->peak_holds[index] = visualizer->config.peak_change_rate / 3;
+    } else if (visualizer->peak_holds[index] > 0) {
+      visualizer->peak_holds[index]--;
+    } else {
+      cap = MAX(0.0f, cap - speed * 2.1f);
+    }
+    break;
+  case PWVIZ_PEAK_MOTION_FALL:
+  default:
+    if (current > cap) {
+      cap = current;
+      visualizer->peak_holds[index] = visualizer->config.peak_change_rate;
+    } else if (visualizer->peak_holds[index] > 0) {
+      visualizer->peak_holds[index]--;
+    } else {
+      cap = MAX(0.0f, cap - speed);
+    }
+    break;
+  }
+
+  visualizer->peak_caps[index] = CLAMP(cap, 0.0f, 1.0f);
+}
+
+static void peak_color(PwvizVisualizer *visualizer, int bar_index,
+                       double level, double *red, double *green, double *blue,
+                       double *source_alpha) {
+  double bar_red;
+  double bar_green;
+  double bar_blue;
+  double bar_alpha;
+
+  style_color(visualizer, bar_index, level, &bar_red, &bar_green, &bar_blue,
+              &bar_alpha);
+
+  switch (visualizer->config.peak_color_mode) {
+  case PWVIZ_PEAK_COLOR_FADE:
+    *red = visualizer->config.peak_color.red;
+    *green = visualizer->config.peak_color.green;
+    *blue = visualizer->config.peak_color.blue;
+    *source_alpha = visualizer->config.peak_color.alpha;
+    break;
+  case PWVIZ_PEAK_COLOR_LEVEL:
+    *red = bar_red;
+    *green = bar_green;
+    *blue = bar_blue;
+    *source_alpha = bar_alpha;
+    break;
+  case PWVIZ_PEAK_COLOR_LEVEL_FADE:
+  default:
+    *red = mix(visualizer->config.peak_color.red, bar_red, level);
+    *green = mix(visualizer->config.peak_color.green, bar_green, level);
+    *blue = mix(visualizer->config.peak_color.blue, bar_blue, level);
+    *source_alpha = mix(visualizer->config.peak_color.alpha, bar_alpha, 0.5);
+    break;
+  }
+}
+
+static void append_now_playing_part(GString *line, const char *text) {
+  if (!text || text[0] == '\0')
+    return;
+
+  if (line->len > 0)
+    g_string_append(line, "  |  ");
+  g_string_append(line, text);
+}
+
+static char *now_playing_text(PwvizVisualizer *visualizer) {
+  GString *line = g_string_new(NULL);
+
+  if (visualizer->config.now_playing_show_app)
+    append_now_playing_part(line, visualizer->now_playing.app);
+  if (visualizer->config.now_playing_show_title)
+    append_now_playing_part(line, visualizer->now_playing.title);
+  if (visualizer->config.now_playing_show_artist)
+    append_now_playing_part(line, visualizer->now_playing.artist);
+  if (visualizer->config.now_playing_show_album)
+    append_now_playing_part(line, visualizer->now_playing.album);
+
+  return g_string_free(line, FALSE);
+}
+
+static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
+                             int width, int height) {
+  int section_h = now_playing_height(visualizer);
+
+  if (section_h <= 0)
+    return;
+
+  char *text = now_playing_text(visualizer);
+  if (!text || text[0] == '\0') {
+    g_free(text);
+    return;
+  }
+
+  double y = height - section_h;
+  double alpha = CLAMP(visualizer->config.now_playing_alpha, 0.0, 1.0);
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, alpha);
+  cairo_rectangle(cr, 0.0, y, width, section_h);
+  cairo_fill(cr);
+
+  PangoLayout *layout = pango_cairo_create_layout(cr);
+  PangoFontDescription *font = pango_font_description_new();
+
+  pango_font_description_set_family(font, "Sans");
+  pango_font_description_set_size(
+      font, visualizer->config.now_playing_font_size * PANGO_SCALE);
+  pango_layout_set_font_description(layout, font);
+  pango_layout_set_width(layout, MAX(1, width - 16) * PANGO_SCALE);
+  pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+  pango_layout_set_single_paragraph_mode(layout, TRUE);
+  pango_layout_set_text(layout, text, -1);
+
+  int text_h = 0;
+  pango_layout_get_pixel_size(layout, NULL, &text_h);
+  double text_y = y + MAX(0, section_h - text_h) / 2.0;
+
+  cairo_move_to(cr, 8.0, text_y);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.96);
+  pango_cairo_show_layout(cr, layout);
+
+  pango_font_description_free(font);
+  g_object_unref(layout);
+  g_free(text);
+}
+
 static void queue_visualizer_draw(PwvizVisualizer *visualizer) {
   gtk_widget_queue_draw(GTK_WIDGET(visualizer->window));
 }
@@ -108,83 +482,68 @@ static void update_spectrum(PwvizVisualizer *visualizer) {
   pwviz_audio_buffer_copy_latest(visualizer->audio_buffer,
                                  visualizer->fft_samples, PWVIZ_FFT_SIZE);
   pwviz_fft_analyze(&visualizer->fft, visualizer->fft_samples,
-                    visualizer->magnitudes);
+                    visualizer->magnitudes, visualizer->config.fft_equalize,
+                    visualizer->config.fft_envelope);
+  PwvizAppConfig analysis_config = visualizer->config;
+  analysis_config.bar_count =
+      effective_bar_count(visualizer, visualizer->width);
   pwviz_binner_calculate(&visualizer->binner, visualizer->magnitudes,
-                         visualizer->levels);
+                         visualizer->levels, &analysis_config);
 
-  for (int i = 0; i < PWVIZ_BAR_COUNT; i++) {
+  int bar_count = effective_bar_count(visualizer, visualizer->width);
+  float falloff = visualizer->config.falloff_rate / 255.0f;
+
+  for (int i = 0; i < bar_count; i++) {
     float value = visualizer->levels[i];
 
     if (value < visualizer->config.display_threshold)
       value = 0.0f;
 
-    if (value > visualizer->bars[i])
-      visualizer->bars[i] = visualizer->bars[i] * 0.4f + value * 0.6f;
-    else {
-      float falloff = value > 0.0f ? 0.85f : 0.6f;
-      visualizer->bars[i] = visualizer->bars[i] * falloff + value * 0.15f;
-    }
+    float falling = MAX(0.0f, visualizer->bars[i] - falloff);
+    visualizer->bars[i] = value > falling ? value : falling;
   }
+
+  for (int i = bar_count; i < PWVIZ_BAR_COUNT; i++)
+    visualizer->bars[i] = 0.0f;
 }
 
 static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
                           int height) {
   double visual_top = PWVIZ_SPECTRUM_TOP_PADDING;
-  double visual_bottom = height - PWVIZ_SPECTRUM_BOTTOM_PADDING;
+  double visual_bottom =
+      height - PWVIZ_SPECTRUM_BOTTOM_PADDING - now_playing_height(visualizer);
   double visual_height = visual_bottom - visual_top;
-  int bar_count = CLAMP(visualizer->config.bar_count, 1, PWVIZ_BAR_COUNT);
+  int bar_count = effective_bar_count(visualizer, width);
   double bar_w = (double)width / bar_count;
   double block_h = visualizer->config.block_height;
   double block_gap = visualizer->config.block_gap;
+  double block_w = MAX(1.0, bar_w - visualizer->config.x_spacing);
 
   if (visual_height <= block_h)
     return;
 
-  if (visualizer->config.show_border) {
-    cairo_set_source_rgba(cr, visualizer->config.high_color.red,
-                          visualizer->config.high_color.green,
-                          visualizer->config.high_color.blue,
-                          pct_alpha(BORDER_ALPHA));
-    cairo_set_line_width(cr, 1.0);
-    cairo_rectangle(cr, 0.5, visual_top - 0.5, width - 1.0,
-                    visual_height + 1.0);
-    cairo_stroke(cr);
-  }
-
   for (int i = 0; i < bar_count; i++) {
-    if (visualizer->bars[i] > visualizer->peak_caps[i]) {
-      visualizer->peak_caps[i] = visualizer->bars[i];
-      visualizer->peak_holds[i] = visualizer->config.peak_hold_frames;
-    } else if (visualizer->peak_holds[i] > 0) {
-      visualizer->peak_holds[i]--;
-    } else {
-      visualizer->peak_caps[i] =
-          MAX(0.0f, visualizer->peak_caps[i] -
-                         visualizer->config.peak_fall_per_frame);
-    }
+    update_peak_cap(visualizer, i);
 
     double bar_value = visualizer->config.analyzer_mode == PWVIZ_ANALYZER_PEAK
                            ? visualizer->peak_caps[i]
                            : visualizer->bars[i];
     double h = bar_value * visual_height;
     double x = i * bar_w;
+    double bar_x = x + visualizer->config.x_spacing / 2.0;
     double lit_top = visual_bottom - h;
-    double block_w = MAX(1.0, bar_w - 2.0);
 
     for (double y = visual_bottom - block_h; y >= visual_top;
          y -= block_h + block_gap) {
       double level = (visual_bottom - y) / visual_height;
       gboolean lit = y >= lit_top;
-      double red = mix(visualizer->config.low_color.red,
-                       visualizer->config.high_color.red, level);
-      double green = mix(visualizer->config.low_color.green,
-                         visualizer->config.high_color.green, level);
-      double blue = mix(visualizer->config.low_color.blue,
-                        visualizer->config.high_color.blue, level);
+      double red;
+      double green;
+      double blue;
+      double source_alpha;
+      style_color(visualizer, i, level, &red, &green, &blue, &source_alpha);
       double alpha =
-          lit ? color_alpha(visualizer->config.bar_alpha,
-                            mix(visualizer->config.low_color.alpha,
-                                visualizer->config.high_color.alpha, level))
+          lit ? color_alpha(visualizer->config.bar_alpha, source_alpha)
               : pct_alpha(INACTIVE_BAR_ALPHA);
 
       if (visualizer->config.analyzer_mode == PWVIZ_ANALYZER_FLASH &&
@@ -193,11 +552,12 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
                             visualizer->config.high_color.alpha);
 
       cairo_set_source_rgba(cr, red, green, blue, alpha);
-      cairo_rectangle(cr, x + 1.0, y, block_w, block_h);
+      cairo_rectangle(cr, bar_x, y, block_w, block_h);
       cairo_fill(cr);
     }
 
-    if (visualizer->config.analyzer_mode == PWVIZ_ANALYZER_FLASH)
+    if (visualizer->config.analyzer_mode == PWVIZ_ANALYZER_FLASH ||
+        visualizer->config.peak_change_rate == 0)
       continue;
 
     double peak_y = visual_bottom - visualizer->peak_caps[i] * visual_height;
@@ -206,14 +566,20 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
         floor((visual_bottom - peak_y) / (block_h + block_gap)) *
             (block_h + block_gap);
 
-    cairo_set_source_rgba(cr, visualizer->config.peak_color.red,
-                          visualizer->config.peak_color.green,
-                          visualizer->config.peak_color.blue,
-                          color_alpha(visualizer->config.bar_alpha,
-                                      visualizer->config.peak_color.alpha));
-    cairo_rectangle(cr, x + 1.0,
-                    CLAMP(snapped_peak_y, visual_top, visual_bottom - block_h),
-                    block_w, block_h);
+    double peak_block_y =
+        CLAMP(snapped_peak_y, visual_top, visual_bottom - block_h);
+    double peak_level = visualizer->peak_caps[i];
+    double peak_red;
+    double peak_green;
+    double peak_blue;
+    double peak_source_alpha;
+    peak_color(visualizer, i, peak_level, &peak_red, &peak_green, &peak_blue,
+               &peak_source_alpha);
+    double peak_alpha =
+        color_alpha(visualizer->config.bar_alpha, peak_source_alpha);
+
+    cairo_set_source_rgba(cr, peak_red, peak_green, peak_blue, peak_alpha);
+    cairo_rectangle(cr, bar_x, peak_block_y, block_w, block_h);
     cairo_fill(cr);
   }
 }
@@ -228,13 +594,10 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
   update_input_region(visualizer);
   update_spectrum(visualizer);
 
-  cairo_set_source_rgba(cr, visualizer->config.background_color.red,
-                        visualizer->config.background_color.green,
-                        visualizer->config.background_color.blue,
-                        color_alpha(visualizer->config.background_alpha,
-                                    visualizer->config.background_color.alpha));
-  cairo_paint(cr);
+  draw_background(visualizer, cr, width, height,
+                  effective_bar_count(visualizer, width));
   draw_spectrum(visualizer, cr, width, height);
+  draw_now_playing(visualizer, cr, width, height);
 }
 
 static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
@@ -243,6 +606,18 @@ static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
   (void)data;
 
   gtk_widget_queue_draw(widget);
+  return G_SOURCE_CONTINUE;
+}
+
+static gboolean now_playing_refresh_cb(gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  if (visualizer->config.now_playing_enabled)
+    pwviz_now_playing_refresh(&visualizer->now_playing);
+  else
+    pwviz_now_playing_clear(&visualizer->now_playing);
+
+  queue_visualizer_draw(visualizer);
   return G_SOURCE_CONTINUE;
 }
 
@@ -324,10 +699,112 @@ static void analyzer_mode_toggled_cb(GtkCheckButton *button, gpointer data) {
   queue_visualizer_draw(visualizer);
 }
 
+static void level_mode_toggled_cb(GtkCheckButton *button, gpointer data) {
+  if (!gtk_check_button_get_active(button))
+    return;
+
+  PwvizVisualizer *visualizer = data;
+  visualizer->config.level_mode =
+      GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "level-mode"));
+  queue_visualizer_draw(visualizer);
+}
+
+static void classic_option_toggled_cb(GtkCheckButton *button, gpointer data) {
+  if (!gtk_check_button_get_active(button))
+    return;
+
+  PwvizVisualizer *visualizer = data;
+  ClassicOptionTarget target =
+      GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "classic-target"));
+  int value = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),
+                                               "classic-value"));
+
+  switch (target) {
+  case CLASSIC_OPTION_BAR_STYLE:
+    visualizer->config.bar_style = value;
+    break;
+  case CLASSIC_OPTION_BACKGROUND:
+    visualizer->config.background_mode = value;
+    break;
+  case CLASSIC_OPTION_PEAK_COLOR:
+    visualizer->config.peak_color_mode = value;
+    break;
+  case CLASSIC_OPTION_PEAK_MOTION:
+    visualizer->config.peak_motion = value;
+    break;
+  }
+
+  queue_visualizer_draw(visualizer);
+}
+
+static GtkWidget *classic_radio_group(PwvizVisualizer *visualizer,
+                                      ClassicOptionTarget target,
+                                      const RadioOption *options,
+                                      guint option_count, int active_value) {
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
+  GtkWidget *first = NULL;
+
+  for (guint i = 0; i < option_count; i++) {
+    GtkWidget *button = gtk_check_button_new_with_label(options[i].label);
+
+    if (first)
+      gtk_check_button_set_group(GTK_CHECK_BUTTON(button),
+                                 GTK_CHECK_BUTTON(first));
+    else
+      first = button;
+
+    g_object_set_data(G_OBJECT(button), "classic-target",
+                      GINT_TO_POINTER(target));
+    g_object_set_data(G_OBJECT(button), "classic-value",
+                      GINT_TO_POINTER(options[i].value));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(button),
+                                options[i].value == active_value);
+    g_signal_connect(button, "toggled", G_CALLBACK(classic_option_toggled_cb),
+                     visualizer);
+    gtk_box_append(GTK_BOX(box), button);
+  }
+
+  return box;
+}
+
+static GtkWidget *classic_group(PwvizVisualizer *visualizer, const char *label,
+                                ClassicOptionTarget target,
+                                const RadioOption *options,
+                                guint option_count, int active_value) {
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+
+  gtk_box_append(GTK_BOX(box), section_label(label));
+  gtk_box_append(GTK_BOX(box),
+                 classic_radio_group(visualizer, target, options, option_count,
+                                     active_value));
+  return box;
+}
+
 static void bar_count_changed_cb(GtkSpinButton *spin, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
   visualizer->config.bar_count = gtk_spin_button_get_value_as_int(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void auto_bar_count_toggled_cb(GtkCheckButton *button, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.auto_bar_count = gtk_check_button_get_active(button);
+  queue_visualizer_draw(visualizer);
+}
+
+static void bar_width_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.bar_width = gtk_spin_button_get_value_as_int(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void x_spacing_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.x_spacing = gtk_spin_button_get_value_as_int(spin);
   queue_visualizer_draw(visualizer);
 }
 
@@ -345,16 +822,43 @@ static void block_gap_changed_cb(GtkSpinButton *spin, gpointer data) {
   queue_visualizer_draw(visualizer);
 }
 
-static void peak_hold_changed_cb(GtkSpinButton *spin, gpointer data) {
+static void falloff_rate_changed_cb(GtkSpinButton *spin, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  visualizer->config.peak_hold_frames = gtk_spin_button_get_value_as_int(spin);
+  visualizer->config.falloff_rate = gtk_spin_button_get_value_as_int(spin);
+}
+
+static void peak_change_rate_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.peak_change_rate = gtk_spin_button_get_value_as_int(spin);
 }
 
 static void peak_fall_changed_cb(GtkRange *range, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
   visualizer->config.peak_fall_per_frame = gtk_range_get_value(range);
+}
+
+static void fft_equalize_toggled_cb(GtkCheckButton *button, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.fft_equalize = gtk_check_button_get_active(button);
+  queue_visualizer_draw(visualizer);
+}
+
+static void fft_envelope_changed_cb(GtkRange *range, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.fft_envelope = gtk_range_get_value(range);
+  queue_visualizer_draw(visualizer);
+}
+
+static void fft_scale_changed_cb(GtkRange *range, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.fft_scale = gtk_range_get_value(range);
+  queue_visualizer_draw(visualizer);
 }
 
 static void display_threshold_changed_cb(GtkRange *range, gpointer data) {
@@ -378,10 +882,55 @@ static void bar_alpha_changed_cb(GtkRange *range, gpointer data) {
   queue_visualizer_draw(visualizer);
 }
 
-static void show_border_toggled_cb(GtkCheckButton *button, gpointer data) {
+static void now_playing_enabled_toggled_cb(GtkCheckButton *button,
+                                           gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  visualizer->config.show_border = gtk_check_button_get_active(button);
+  visualizer->config.now_playing_enabled = gtk_check_button_get_active(button);
+  if (visualizer->config.now_playing_enabled)
+    pwviz_now_playing_refresh(&visualizer->now_playing);
+  else
+    pwviz_now_playing_clear(&visualizer->now_playing);
+  queue_visualizer_draw(visualizer);
+}
+
+static void now_playing_show_toggled_cb(GtkCheckButton *button, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+  const char *field = g_object_get_data(G_OBJECT(button), "now-playing-field");
+  gboolean active = gtk_check_button_get_active(button);
+
+  if (g_strcmp0(field, "app") == 0)
+    visualizer->config.now_playing_show_app = active;
+  else if (g_strcmp0(field, "title") == 0)
+    visualizer->config.now_playing_show_title = active;
+  else if (g_strcmp0(field, "artist") == 0)
+    visualizer->config.now_playing_show_artist = active;
+  else if (g_strcmp0(field, "album") == 0)
+    visualizer->config.now_playing_show_album = active;
+
+  queue_visualizer_draw(visualizer);
+}
+
+static void now_playing_height_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.now_playing_height = gtk_spin_button_get_value_as_int(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void now_playing_font_size_changed_cb(GtkSpinButton *spin,
+                                             gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.now_playing_font_size =
+      gtk_spin_button_get_value_as_int(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void now_playing_alpha_changed_cb(GtkRange *range, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.now_playing_alpha = gtk_range_get_value(range);
   queue_visualizer_draw(visualizer);
 }
 
@@ -474,23 +1023,30 @@ static GtkWidget *color_control(PwvizVisualizer *visualizer, ColorTarget target,
 static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   GtkWidget *box = tab_box();
   GtkWidget *mode_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+  GtkWidget *level_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
   GtkWidget *bars = gtk_check_button_new_with_label("Bars");
   GtkWidget *peak = gtk_check_button_new_with_label("Peak");
   GtkWidget *flash = gtk_check_button_new_with_label("Flash");
-  GtkWidget *bar_count = gtk_spin_button_new_with_range(8, PWVIZ_BAR_COUNT, 1);
-  GtkWidget *peak_hold = gtk_spin_button_new_with_range(0, 120, 1);
-  GtkWidget *peak_fall =
-      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.001, 0.08, 0.001);
+  GtkWidget *level_peak = gtk_check_button_new_with_label("Peak");
+  GtkWidget *level_average = gtk_check_button_new_with_label("Average");
+  GtkWidget *falloff = gtk_spin_button_new_with_range(0, 75, 1);
   GtkWidget *display_threshold =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 0.5, 0.01);
+  GtkWidget *fft_equalize = gtk_check_button_new_with_label("Equalize");
+  GtkWidget *fft_envelope =
+      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 5.0, 0.01);
+  GtkWidget *fft_scale =
+      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.1, 25.0, 0.1);
 
-  prepare_spin(bar_count);
-  prepare_spin(peak_hold);
-  prepare_scale(peak_fall, 3);
+  prepare_spin(falloff);
   prepare_scale(display_threshold, 2);
+  prepare_scale(fft_envelope, 2);
+  prepare_scale(fft_scale, 1);
 
   gtk_check_button_set_group(GTK_CHECK_BUTTON(peak), GTK_CHECK_BUTTON(bars));
   gtk_check_button_set_group(GTK_CHECK_BUTTON(flash), GTK_CHECK_BUTTON(bars));
+  gtk_check_button_set_group(GTK_CHECK_BUTTON(level_average),
+                             GTK_CHECK_BUTTON(level_peak));
 
   g_object_set_data(G_OBJECT(bars), "mode",
                     GINT_TO_POINTER(PWVIZ_ANALYZER_BARS));
@@ -498,6 +1054,10 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                     GINT_TO_POINTER(PWVIZ_ANALYZER_PEAK));
   g_object_set_data(G_OBJECT(flash), "mode",
                     GINT_TO_POINTER(PWVIZ_ANALYZER_FLASH));
+  g_object_set_data(G_OBJECT(level_peak), "level-mode",
+                    GINT_TO_POINTER(PWVIZ_LEVEL_PEAK));
+  g_object_set_data(G_OBJECT(level_average), "level-mode",
+                    GINT_TO_POINTER(PWVIZ_LEVEL_AVERAGE));
 
   gtk_check_button_set_active(
       GTK_CHECK_BUTTON(visualizer->config.analyzer_mode == PWVIZ_ANALYZER_PEAK
@@ -507,14 +1067,20 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                                  ? flash
                                  : bars),
       TRUE);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(bar_count),
-                            visualizer->config.bar_count);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(peak_hold),
-                            visualizer->config.peak_hold_frames);
-  gtk_range_set_value(GTK_RANGE(peak_fall),
-                      visualizer->config.peak_fall_per_frame);
+  gtk_check_button_set_active(
+      GTK_CHECK_BUTTON(visualizer->config.level_mode == PWVIZ_LEVEL_PEAK
+                           ? level_peak
+                           : level_average),
+      TRUE);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(falloff),
+                            visualizer->config.falloff_rate);
   gtk_range_set_value(GTK_RANGE(display_threshold),
                       visualizer->config.display_threshold);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(fft_equalize),
+                              visualizer->config.fft_equalize);
+  gtk_range_set_value(GTK_RANGE(fft_envelope),
+                      visualizer->config.fft_envelope);
+  gtk_range_set_value(GTK_RANGE(fft_scale), visualizer->config.fft_scale);
 
   g_signal_connect(bars, "toggled", G_CALLBACK(analyzer_mode_toggled_cb),
                    visualizer);
@@ -522,27 +1088,37 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                    visualizer);
   g_signal_connect(flash, "toggled", G_CALLBACK(analyzer_mode_toggled_cb),
                    visualizer);
-  g_signal_connect(bar_count, "value-changed",
-                   G_CALLBACK(bar_count_changed_cb), visualizer);
-  g_signal_connect(peak_hold, "value-changed",
-                   G_CALLBACK(peak_hold_changed_cb), visualizer);
-  g_signal_connect(peak_fall, "value-changed",
-                   G_CALLBACK(peak_fall_changed_cb), visualizer);
+  g_signal_connect(level_peak, "toggled", G_CALLBACK(level_mode_toggled_cb),
+                   visualizer);
+  g_signal_connect(level_average, "toggled", G_CALLBACK(level_mode_toggled_cb),
+                   visualizer);
+  g_signal_connect(falloff, "value-changed",
+                   G_CALLBACK(falloff_rate_changed_cb), visualizer);
   g_signal_connect(display_threshold, "value-changed",
                    G_CALLBACK(display_threshold_changed_cb), visualizer);
+  g_signal_connect(fft_equalize, "toggled",
+                   G_CALLBACK(fft_equalize_toggled_cb), visualizer);
+  g_signal_connect(fft_envelope, "value-changed",
+                   G_CALLBACK(fft_envelope_changed_cb), visualizer);
+  g_signal_connect(fft_scale, "value-changed", G_CALLBACK(fft_scale_changed_cb),
+                   visualizer);
 
   gtk_box_append(GTK_BOX(mode_row), bars);
   gtk_box_append(GTK_BOX(mode_row), peak);
   gtk_box_append(GTK_BOX(mode_row), flash);
+  gtk_box_append(GTK_BOX(level_row), level_peak);
+  gtk_box_append(GTK_BOX(level_row), level_average);
 
-  gtk_box_append(GTK_BOX(box), section_label("Analyzer"));
-  gtk_box_append(GTK_BOX(box), control_row("Mode", mode_row));
-  gtk_box_append(GTK_BOX(box), control_row("Bars", bar_count));
+  gtk_box_append(GTK_BOX(box), section_label("Output"));
+  gtk_box_append(GTK_BOX(box), control_row("Display mode", mode_row));
+  gtk_box_append(GTK_BOX(box), control_row("Bin calculation", level_row));
   gtk_box_append(GTK_BOX(box), control_row("Display threshold",
                                            display_threshold));
-  gtk_box_append(GTK_BOX(box), section_label("Peak"));
-  gtk_box_append(GTK_BOX(box), control_row("Peak hold", peak_hold));
-  gtk_box_append(GTK_BOX(box), control_row("Peak fall speed", peak_fall));
+  gtk_box_append(GTK_BOX(box), control_row("Falloff", falloff));
+  gtk_box_append(GTK_BOX(box), section_label("FFT"));
+  gtk_box_append(GTK_BOX(box), fft_equalize);
+  gtk_box_append(GTK_BOX(box), control_row("Envelope", fft_envelope));
+  gtk_box_append(GTK_BOX(box), control_row("Scale", fft_scale));
   return box;
 }
 
@@ -601,47 +1177,115 @@ static GtkWidget *build_layout_tab(PwvizVisualizer *visualizer) {
 
 static GtkWidget *build_style_tab(PwvizVisualizer *visualizer) {
   GtkWidget *box = tab_box();
+  GtkWidget *style_grid = gtk_grid_new();
+  GtkWidget *bar_width = gtk_spin_button_new_with_range(1, 50, 1);
+  GtkWidget *x_spacing = gtk_spin_button_new_with_range(0, 10, 1);
   GtkWidget *block_height = gtk_spin_button_new_with_range(1, 16, 1);
   GtkWidget *block_gap = gtk_spin_button_new_with_range(0, 12, 1);
+  GtkWidget *bar_count = gtk_spin_button_new_with_range(8, PWVIZ_BAR_COUNT, 1);
+  GtkWidget *auto_bars = gtk_check_button_new_with_label("Auto bars from width");
+  GtkWidget *peak_change = gtk_spin_button_new_with_range(0, 255, 1);
+  GtkWidget *peak_fall =
+      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.001, 0.08, 0.001);
   GtkWidget *alpha =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
   GtkWidget *bar_alpha =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
-  GtkWidget *border = gtk_check_button_new_with_label("Show analyzer border");
 
+  gtk_grid_set_column_spacing(GTK_GRID(style_grid), 24);
+  gtk_grid_set_row_spacing(GTK_GRID(style_grid), 8);
+  gtk_widget_set_hexpand(style_grid, TRUE);
+  prepare_spin(bar_width);
+  prepare_spin(x_spacing);
   prepare_spin(block_height);
   prepare_spin(block_gap);
+  prepare_spin(bar_count);
+  prepare_spin(peak_change);
+  prepare_scale(peak_fall, 3);
   prepare_scale(alpha, 2);
   prepare_scale(bar_alpha, 2);
 
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(bar_count),
+                            visualizer->config.bar_count);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(auto_bars),
+                              visualizer->config.auto_bar_count);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(bar_width),
+                            visualizer->config.bar_width);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(x_spacing),
+                            visualizer->config.x_spacing);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(block_height),
                             visualizer->config.block_height);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(block_gap),
                             visualizer->config.block_gap);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(peak_change),
+                            visualizer->config.peak_change_rate);
+  gtk_range_set_value(GTK_RANGE(peak_fall),
+                      visualizer->config.peak_fall_per_frame);
   gtk_range_set_value(GTK_RANGE(alpha), visualizer->config.background_alpha);
   gtk_range_set_value(GTK_RANGE(bar_alpha), visualizer->config.bar_alpha);
-  gtk_check_button_set_active(GTK_CHECK_BUTTON(border),
-                              visualizer->config.show_border);
 
+  g_signal_connect(bar_count, "value-changed",
+                   G_CALLBACK(bar_count_changed_cb), visualizer);
+  g_signal_connect(auto_bars, "toggled",
+                   G_CALLBACK(auto_bar_count_toggled_cb), visualizer);
+  g_signal_connect(bar_width, "value-changed",
+                   G_CALLBACK(bar_width_changed_cb), visualizer);
+  g_signal_connect(x_spacing, "value-changed",
+                   G_CALLBACK(x_spacing_changed_cb), visualizer);
   g_signal_connect(block_height, "value-changed",
                    G_CALLBACK(block_height_changed_cb), visualizer);
   g_signal_connect(block_gap, "value-changed", G_CALLBACK(block_gap_changed_cb),
                    visualizer);
+  g_signal_connect(peak_change, "value-changed",
+                   G_CALLBACK(peak_change_rate_changed_cb), visualizer);
+  g_signal_connect(peak_fall, "value-changed",
+                   G_CALLBACK(peak_fall_changed_cb), visualizer);
   g_signal_connect(alpha, "value-changed",
                    G_CALLBACK(background_alpha_changed_cb), visualizer);
   g_signal_connect(bar_alpha, "value-changed",
                    G_CALLBACK(bar_alpha_changed_cb), visualizer);
-  g_signal_connect(border, "toggled", G_CALLBACK(show_border_toggled_cb),
-                   visualizer);
 
-  gtk_box_append(GTK_BOX(box), section_label("Blocks"));
+  gtk_grid_attach(
+      GTK_GRID(style_grid),
+      classic_group(visualizer, "Frequency Bars", CLASSIC_OPTION_BAR_STYLE,
+                    BAR_STYLE_OPTIONS, G_N_ELEMENTS(BAR_STYLE_OPTIONS),
+                    visualizer->config.bar_style),
+      0, 0, 1, 1);
+  gtk_grid_attach(
+      GTK_GRID(style_grid),
+      classic_group(visualizer, "Background", CLASSIC_OPTION_BACKGROUND,
+                    BACKGROUND_OPTIONS, G_N_ELEMENTS(BACKGROUND_OPTIONS),
+                    visualizer->config.background_mode),
+      1, 0, 1, 1);
+  gtk_grid_attach(
+      GTK_GRID(style_grid),
+      classic_group(visualizer, "Peak Colour", CLASSIC_OPTION_PEAK_COLOR,
+                    PEAK_COLOR_OPTIONS, G_N_ELEMENTS(PEAK_COLOR_OPTIONS),
+                    visualizer->config.peak_color_mode),
+      2, 0, 1, 1);
+  gtk_grid_attach(
+      GTK_GRID(style_grid),
+      classic_group(visualizer, "Peak Motion", CLASSIC_OPTION_PEAK_MOTION,
+                    PEAK_MOTION_OPTIONS, G_N_ELEMENTS(PEAK_MOTION_OPTIONS),
+                    visualizer->config.peak_motion),
+      3, 0, 1, 1);
+
+  gtk_box_append(GTK_BOX(box), style_grid);
+  gtk_box_append(GTK_BOX(box), section_label("Bars"));
+  gtk_box_append(GTK_BOX(box), control_row("Count", bar_count));
+  gtk_box_append(GTK_BOX(box), auto_bars);
   gtk_box_append(GTK_BOX(box),
-                 paired_control_row("Shape", "Height", block_height, "Gap",
+                 paired_control_row("Geometry", "Width", bar_width, "X gap",
+                                    x_spacing));
+  gtk_box_append(GTK_BOX(box),
+                 paired_control_row("Blocks", "Height", block_height, "Gap",
                                     block_gap));
+  gtk_box_append(GTK_BOX(box), section_label("Peak Indicators"));
+  gtk_box_append(GTK_BOX(box), control_row("Change", peak_change));
+  gtk_box_append(GTK_BOX(box), control_row("Fall speed", peak_fall));
   gtk_box_append(GTK_BOX(box), section_label("Transparency"));
   gtk_box_append(GTK_BOX(box), control_row("Background alpha", alpha));
   gtk_box_append(GTK_BOX(box), control_row("Bar opacity", bar_alpha));
-  gtk_box_append(GTK_BOX(box), border);
   return box;
 }
 
@@ -670,6 +1314,77 @@ static GtkWidget *build_colour_tab(PwvizVisualizer *visualizer) {
                              color_control(visualizer, COLOR_BACKGROUND,
                                            &visualizer->config.background_color,
                                            "Background Colour")));
+  return box;
+}
+
+static GtkWidget *now_playing_field_toggle(PwvizVisualizer *visualizer,
+                                           const char *label,
+                                           const char *field,
+                                           gboolean active) {
+  GtkWidget *button = gtk_check_button_new_with_label(label);
+
+  g_object_set_data(G_OBJECT(button), "now-playing-field", (gpointer)field);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(button), active);
+  g_signal_connect(button, "toggled",
+                   G_CALLBACK(now_playing_show_toggled_cb), visualizer);
+  return button;
+}
+
+static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
+  GtkWidget *box = tab_box();
+  GtkWidget *enabled = gtk_check_button_new_with_label("Show Now Playing");
+  GtkWidget *fields = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  GtkWidget *height = gtk_spin_button_new_with_range(0, 160, 1);
+  GtkWidget *font_size = gtk_spin_button_new_with_range(8, 32, 1);
+  GtkWidget *alpha =
+      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
+
+  prepare_spin(height);
+  prepare_spin(font_size);
+  prepare_scale(alpha, 2);
+
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(enabled),
+                              visualizer->config.now_playing_enabled);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(height),
+                            visualizer->config.now_playing_height);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(font_size),
+                            visualizer->config.now_playing_font_size);
+  gtk_range_set_value(GTK_RANGE(alpha), visualizer->config.now_playing_alpha);
+
+  gtk_box_append(GTK_BOX(fields),
+                 now_playing_field_toggle(
+                     visualizer, "App", "app",
+                     visualizer->config.now_playing_show_app));
+  gtk_box_append(GTK_BOX(fields),
+                 now_playing_field_toggle(
+                     visualizer, "Title", "title",
+                     visualizer->config.now_playing_show_title));
+  gtk_box_append(GTK_BOX(fields),
+                 now_playing_field_toggle(
+                     visualizer, "Artist", "artist",
+                     visualizer->config.now_playing_show_artist));
+  gtk_box_append(GTK_BOX(fields),
+                 now_playing_field_toggle(
+                     visualizer, "Album", "album",
+                     visualizer->config.now_playing_show_album));
+
+  g_signal_connect(enabled, "toggled",
+                   G_CALLBACK(now_playing_enabled_toggled_cb), visualizer);
+  g_signal_connect(height, "value-changed",
+                   G_CALLBACK(now_playing_height_changed_cb), visualizer);
+  g_signal_connect(font_size, "value-changed",
+                   G_CALLBACK(now_playing_font_size_changed_cb), visualizer);
+  g_signal_connect(alpha, "value-changed",
+                   G_CALLBACK(now_playing_alpha_changed_cb), visualizer);
+
+  gtk_box_append(GTK_BOX(box), section_label("Metadata"));
+  gtk_box_append(GTK_BOX(box), enabled);
+  gtk_box_append(GTK_BOX(box), control_row("Fields", fields));
+  gtk_box_append(GTK_BOX(box), section_label("Bottom Section"));
+  gtk_box_append(GTK_BOX(box),
+                 paired_control_row("Sizing", "Height", height, "Font",
+                                    font_size));
+  gtk_box_append(GTK_BOX(box), control_row("Background alpha", alpha));
   return box;
 }
 
@@ -702,8 +1417,8 @@ static GtkWidget *build_profiles_tab(PwvizVisualizer *visualizer) {
   GtkWidget *box = tab_box();
   GtkWidget *list = gtk_list_box_new();
   GtkWidget *hint =
-      gtk_label_new("Select a profile to load its colours. Use Save or OK to "
-                    "persist the current settings.");
+      gtk_label_new("Select a profile to load its colours and analyzer "
+                    "settings. Use Save or OK to persist them.");
 
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_SINGLE);
   gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(list), TRUE);
@@ -803,7 +1518,7 @@ static void show_config_window(PwvizVisualizer *visualizer) {
   visualizer->config_window = GTK_WINDOW(window);
 
   gtk_window_set_title(GTK_WINDOW(window), "Classic Spectrum Analyzer Settings");
-  gtk_window_set_default_size(GTK_WINDOW(window), 520, 400);
+  gtk_window_set_default_size(GTK_WINDOW(window), 680, 460);
   gtk_window_set_transient_for(GTK_WINDOW(window), visualizer->window);
 
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
@@ -815,6 +1530,9 @@ static void show_config_window(PwvizVisualizer *visualizer) {
                            gtk_label_new("Style"));
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_colour_tab(visualizer),
                            gtk_label_new("Colour Factory"));
+  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
+                           build_now_playing_tab(visualizer),
+                           gtk_label_new("Now Playing"));
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
                            build_profiles_tab(visualizer),
                            gtk_label_new("Profiles"));
@@ -961,6 +1679,8 @@ static void visualizer_init(PwvizVisualizer *visualizer,
 
   pwviz_app_config_load(&visualizer->config);
   visualizer->config_snapshot = visualizer->config;
+  if (visualizer->config.now_playing_enabled)
+    pwviz_now_playing_refresh(&visualizer->now_playing);
   pwviz_fft_init(&visualizer->fft);
   pwviz_binner_init(&visualizer->binner);
 }
@@ -969,6 +1689,8 @@ static void visualizer_free(PwvizVisualizer *visualizer) {
   if (!visualizer)
     return;
 
+  if (visualizer->now_playing_source)
+    g_source_remove(visualizer->now_playing_source);
   pwviz_global_shortcut_free(visualizer->global_shortcut);
   g_free(visualizer);
 }
@@ -1018,6 +1740,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
   visualizer->global_shortcut =
       pwviz_global_shortcut_register(show_config_window_cb, visualizer);
+  visualizer->now_playing_source =
+      g_timeout_add_seconds(1, now_playing_refresh_cb, visualizer);
 
   gtk_widget_add_tick_callback(area, tick_cb, NULL, NULL);
   g_signal_connect_swapped(window, "map", G_CALLBACK(update_input_region),

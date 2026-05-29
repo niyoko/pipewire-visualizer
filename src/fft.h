@@ -13,4 +13,4 @@ typedef struct {
 
 void pwviz_fft_init(PwvizFft *fft);
 void pwviz_fft_analyze(PwvizFft *fft, const float *samples,
-                       float *magnitudes);
+                       float *magnitudes, int equalize, float envelope_power);

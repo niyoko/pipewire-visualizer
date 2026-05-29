@@ -19,6 +19,7 @@ sources = [
   'src/fft.c',
   'src/global_shortcut.c',
   'src/main.c',
+  'src/now_playing.c',
   'src/pipewire_sink.c',
   'src/visualization.c',
 ]

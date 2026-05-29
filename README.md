@@ -22,6 +22,24 @@ main visual reference is the Winamp-era
 plug-in, with additional reference from the WACUP
 [vis_classic](https://github.com/WACUP/vis_classic) source release.
 
+The Linux app is not a direct port of the Winamp plug-in. PipeWire capture,
+Wayland layer-shell overlay behavior, GTK4 drawing, configuration storage, and
+packaging are specific to this project. The parts intentionally adapted from
+the original Classic Spectrum Analyzer / WACUP `vis_classic` behavior are:
+
+- FFT shaping controls: equalization, envelope power, and FFT scale.
+- Spectrum binning: logarithmic bar-bin distribution with a 16 kHz high-end
+  cutoff.
+- Bar level calculation: selectable peak or average level per bar using
+  0..255-style spectrum levels.
+- Motion controls: bar falloff rate and peak change behavior.
+- Classic visualizer setting categories: frequency bar style, background mode,
+  peak colour behavior, and peak motion options.
+- Visual geometry conventions: bar width, horizontal spacing, vertical block
+  spacing, and profile-specific analyzer defaults.
+- Built-in colour profile names and colour palettes inspired by the original
+  Classic Spectrum Analyzer profiles.
+
 For years I wanted a similar visualizer that works naturally on Linux with
 system audio from YouTube, Spotify, and other music players instead of
 being locked to one media player. I did not have the time to build it properly.
@@ -98,12 +116,25 @@ cp data/pipewire-visualizer-autostart.desktop \
 
 ## Configuration
 
-The overlay window background and border are fully transparent; only the
-spectrum bars and peaks render with alpha. Use `Ctrl+Shift+Alt+F12` to open the
-settings window.
-Settings include analyzer mode, bar count, display threshold, window anchor,
-margins, size, block size, peak behavior, alpha, bar opacity, colours, and
-built-in colour profiles.
+The overlay window background is transparent unless a background mode or alpha
+is configured; spectrum bars and peaks render with alpha. Use
+`Ctrl+Shift+Alt+F12` to open the settings window.
+Settings include analyzer mode, bar count, WACUP-style FFT equalization,
+envelope and scale, level mode, display threshold, falloff, window anchor,
+margins, size, bar width, spacing, block size, peak behavior, alpha, bar
+opacity, colours, Now Playing metadata, and built-in colour profiles.
+
+The Style page exposes the Winamp-era categories shown by the
+original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,
+`Solid Lines`, `Winamp Fire`, `Random`), Background (`Black`, `Grid`,
+`Solid Colour`, `Flash`, `Flash Grid`), Peak Colour (`Fade`, `Level`,
+`Level & Fade`), and Motion (`Normal`, `Fall`, `Rise`, `Fall & Rise`,
+`Rise Fall`, `Sparks`).
+
+The Now Playing section uses MPRIS metadata from the session bus when a player
+provides it. It can show the player app, track title, artist, and album in a
+bottom strip, with configurable visibility, height, font size, and background
+alpha.
 
 Settings are saved to:
 
