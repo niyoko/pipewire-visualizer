@@ -56,6 +56,13 @@ Wayland layer-shell overlay behavior, GTK4 drawing, configuration storage, and
 packaging are specific to this project. The parts intentionally adapted from
 the original Classic Spectrum Analyzer / WACUP `vis_classic` behavior are:
 
+For years I wanted a similar visualizer that works naturally on Linux with
+system audio from YouTube, Spotify, and other music players instead of
+being locked to one media player. I did not have the time to build it properly.
+In 2026, with AI coding agents advanced enough to help move quickly through
+desktop plumbing, PipeWire capture, FFT tuning, Wayland overlay behavior, and
+packaging, it finally became possible to make this version.
+
 - FFT shaping controls: equalization, envelope power, and FFT scale.
 - Spectrum binning: logarithmic bar-bin distribution with a 16 kHz high-end
   cutoff.
@@ -68,13 +75,6 @@ the original Classic Spectrum Analyzer / WACUP `vis_classic` behavior are:
   spacing, and profile-specific analyzer defaults.
 - Built-in colour profile names and colour palettes inspired by the original
   Classic Spectrum Analyzer profiles.
-
-For years I wanted a similar visualizer that works naturally on Linux with
-system audio from YouTube, Spotify, and other music players instead of
-being locked to one media player. I did not have the time to build it properly.
-In 2026, with AI coding agents advanced enough to help move quickly through
-desktop plumbing, PipeWire capture, FFT tuning, Wayland overlay behavior, and
-packaging, it finally became possible to make this version.
 
 ## Requirements
 
