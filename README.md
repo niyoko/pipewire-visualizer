@@ -4,8 +4,10 @@
 current audio stream through PipeWire, runs a real-time FFT over the samples, and
 draws a GTK4 spectrum bar display.
 
-The project is intentionally minimal: one C source file, a Meson build file, and
-runtime dependencies on PipeWire, GTK4, gtk4-layer-shell, FFTW, and libspa.
+The project is intentionally small and split into focused C modules for
+PipeWire capture, the shared audio buffer, FFT analysis, spectrum binning, and
+GTK visualization. Runtime dependencies are PipeWire, GTK4, gtk4-layer-shell,
+FFTW, and libspa.
 
 The window is designed for Wayland compositors that support the wlr-layer-shell
 protocol. It runs as a semitransparent overlay layer surface, stays above normal

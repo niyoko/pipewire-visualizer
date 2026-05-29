@@ -12,4 +12,13 @@ deps = [
   m_dep,
 ]
 
-executable('pwviz', 'main.c', dependencies: deps)
+sources = [
+  'src/audio_buffer.c',
+  'src/binning.c',
+  'src/fft.c',
+  'src/main.c',
+  'src/pipewire_sink.c',
+  'src/visualization.c',
+]
+
+executable('pwviz', sources, dependencies: deps)
