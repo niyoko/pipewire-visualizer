@@ -1,5 +1,6 @@
 #include <fftw3.h>
 #include <gtk/gtk.h>
+#include <gtk4-layer-shell.h>
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
 
@@ -12,6 +13,10 @@
 #define FFT_SIZE 2048
 #define BAR_COUNT 64
 #define RING_SIZE (SAMPLE_RATE * 4)
+#define HANDLE_HEIGHT 22
+#define RESIZE_GRIP_SIZE 28
+#define MIN_WINDOW_WIDTH 240
+#define MIN_WINDOW_HEIGHT 90
 
 static float ring[RING_SIZE];
 static int ring_write = 0;
@@ -21,6 +26,18 @@ static float bars[BAR_COUNT];
 
 static struct pw_stream *stream;
 
+typedef struct {
+  GtkWindow *window;
+  int x;
+  int y;
+  int width;
+  int height;
+  int drag_start_x;
+  int drag_start_y;
+  int resize_start_width;
+  int resize_start_height;
+} AppState;
+
 static void push_sample(float s) {
   pthread_mutex_lock(&ring_lock);
   ring[ring_write] = s;
@@ -29,6 +46,8 @@ static void push_sample(float s) {
 }
 
 static void on_process(void *userdata) {
+  (void)userdata;
+
   struct pw_buffer *b = pw_stream_dequeue_buffer(stream);
   if (!b)
     return;
@@ -87,6 +106,8 @@ static void start_pipewire(void) {
 }
 
 static gpointer pipewire_thread(gpointer data) {
+  (void)data;
+
   start_pipewire();
   return NULL;
 }
@@ -142,11 +163,47 @@ static void calculate_fft(void) {
   }
 }
 
+static void update_input_region(AppState *state) {
+  GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(state->window));
+  if (!surface)
+    return;
+
+  int width = gtk_widget_get_width(GTK_WIDGET(state->window));
+  int height = gtk_widget_get_height(GTK_WIDGET(state->window));
+
+  if (width <= 0)
+    width = state->width;
+  if (height <= 0)
+    height = state->height;
+
+  cairo_region_t *region = cairo_region_create();
+  cairo_rectangle_int_t drag_rect = {0, 0, width, HANDLE_HEIGHT};
+  cairo_rectangle_int_t resize_rect = {
+      width - RESIZE_GRIP_SIZE,
+      height - RESIZE_GRIP_SIZE,
+      RESIZE_GRIP_SIZE,
+      RESIZE_GRIP_SIZE,
+  };
+
+  cairo_region_union_rectangle(region, &drag_rect);
+  cairo_region_union_rectangle(region, &resize_rect);
+  gdk_surface_set_input_region(surface, region);
+  cairo_region_destroy(region);
+}
+
 static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
                     gpointer data) {
+  (void)area;
+
+  AppState *state = data;
+
+  state->width = width;
+  state->height = height;
+  update_input_region(state);
+
   calculate_fft();
 
-  cairo_set_source_rgb(cr, 0.02, 0.02, 0.02);
+  cairo_set_source_rgba(cr, 0.02, 0.02, 0.02, 0.35);
   cairo_paint(cr);
 
   double bar_w = (double)width / BAR_COUNT;
@@ -156,29 +213,198 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
     double x = i * bar_w;
     double y = height - h;
 
-    cairo_set_source_rgb(cr, 0.0, 0.9, 1.0);
+    cairo_set_source_rgba(cr, 0.0, 0.9, 1.0, 0.88);
     cairo_rectangle(cr, x + 1, y, bar_w - 2, h);
     cairo_fill(cr);
   }
 }
 
+static void drag_handle_draw_cb(GtkDrawingArea *area, cairo_t *cr, int width,
+                                int height, gpointer data) {
+  (void)area;
+  (void)data;
+
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.25);
+  cairo_rectangle(cr, 0, 0, width, height);
+  cairo_fill(cr);
+
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.5);
+  cairo_set_line_width(cr, 2.0);
+  cairo_move_to(cr, width / 2.0 - 28.0, height / 2.0);
+  cairo_line_to(cr, width / 2.0 + 28.0, height / 2.0);
+  cairo_stroke(cr);
+}
+
+static void resize_grip_draw_cb(GtkDrawingArea *area, cairo_t *cr, int width,
+                                int height, gpointer data) {
+  (void)area;
+  (void)data;
+
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.25);
+  cairo_rectangle(cr, 0, 0, width, height);
+  cairo_fill(cr);
+
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.55);
+  cairo_set_line_width(cr, 2.0);
+
+  for (int i = 0; i < 3; i++) {
+    double inset = 7.0 + i * 6.0;
+    cairo_move_to(cr, width - inset, height - 4.0);
+    cairo_line_to(cr, width - 4.0, height - inset);
+  }
+
+  cairo_stroke(cr);
+}
+
 static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
                         gpointer data) {
+  (void)clock;
+  (void)data;
+
   gtk_widget_queue_draw(widget);
   return G_SOURCE_CONTINUE;
 }
 
+static void apply_layer_position(AppState *state) {
+  gtk_layer_set_margin(state->window, GTK_LAYER_SHELL_EDGE_LEFT, state->x);
+  gtk_layer_set_margin(state->window, GTK_LAYER_SHELL_EDGE_TOP, state->y);
+}
+
+static void drag_begin_cb(GtkGestureDrag *gesture, double start_x,
+                          double start_y, gpointer data) {
+  (void)gesture;
+  (void)start_x;
+  (void)start_y;
+
+  AppState *state = data;
+
+  state->drag_start_x = state->x;
+  state->drag_start_y = state->y;
+}
+
+static void drag_update_cb(GtkGestureDrag *gesture, double offset_x,
+                           double offset_y, gpointer data) {
+  (void)gesture;
+
+  AppState *state = data;
+
+  state->x = MAX(0, state->drag_start_x + (int)offset_x);
+  state->y = MAX(0, state->drag_start_y + (int)offset_y);
+  apply_layer_position(state);
+}
+
+static void resize_begin_cb(GtkGestureDrag *gesture, double start_x,
+                            double start_y, gpointer data) {
+  (void)gesture;
+  (void)start_x;
+  (void)start_y;
+
+  AppState *state = data;
+
+  state->resize_start_width = state->width;
+  state->resize_start_height = state->height;
+}
+
+static void resize_update_cb(GtkGestureDrag *gesture, double offset_x,
+                             double offset_y, gpointer data) {
+  (void)gesture;
+
+  AppState *state = data;
+
+  state->width = MAX(MIN_WINDOW_WIDTH, state->resize_start_width + (int)offset_x);
+  state->height =
+      MAX(MIN_WINDOW_HEIGHT, state->resize_start_height + (int)offset_y);
+
+  gtk_window_set_default_size(state->window, state->width, state->height);
+  update_input_region(state);
+}
+
+static void install_transparent_window_css(void) {
+  GtkCssProvider *provider = gtk_css_provider_new();
+
+  gtk_css_provider_load_from_string(
+      provider, "window, .pwviz-overlay { background: transparent; }");
+  gtk_style_context_add_provider_for_display(
+      gdk_display_get_default(), GTK_STYLE_PROVIDER(provider),
+      GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref(provider);
+}
+
 static void activate(GtkApplication *app, gpointer user_data) {
+  (void)user_data;
+
   GtkWidget *window = gtk_application_window_new(app);
+  AppState *state = g_new0(AppState, 1);
+
+  state->window = GTK_WINDOW(window);
+  state->width = 900;
+  state->height = 240;
+  state->x = 24;
+  state->y = 24;
+
   gtk_window_set_title(GTK_WINDOW(window), "PipeWire Visualizer");
-  gtk_window_set_default_size(GTK_WINDOW(window), 900, 240);
+  gtk_window_set_default_size(GTK_WINDOW(window), state->width, state->height);
+  gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
+  gtk_window_set_resizable(GTK_WINDOW(window), TRUE);
+
+  gtk_layer_init_for_window(GTK_WINDOW(window));
+  gtk_layer_set_namespace(GTK_WINDOW(window), "pwviz");
+  gtk_layer_set_layer(GTK_WINDOW(window), GTK_LAYER_SHELL_LAYER_OVERLAY);
+  gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_LEFT, TRUE);
+  gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_TOP, TRUE);
+  gtk_layer_set_keyboard_mode(GTK_WINDOW(window),
+                              GTK_LAYER_SHELL_KEYBOARD_MODE_NONE);
+  gtk_layer_set_exclusive_zone(GTK_WINDOW(window), 0);
+  apply_layer_position(state);
+
+  install_transparent_window_css();
+
+  GtkWidget *overlay = gtk_overlay_new();
+  gtk_widget_add_css_class(overlay, "pwviz-overlay");
 
   GtkWidget *area = gtk_drawing_area_new();
-  gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), draw_cb, NULL, NULL);
+  gtk_widget_set_can_target(area, FALSE);
+  gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), draw_cb, state, NULL);
+  gtk_overlay_set_child(GTK_OVERLAY(overlay), area);
 
-  gtk_window_set_child(GTK_WINDOW(window), area);
+  GtkWidget *drag_handle = gtk_drawing_area_new();
+  gtk_widget_set_size_request(drag_handle, -1, HANDLE_HEIGHT);
+  gtk_widget_set_halign(drag_handle, GTK_ALIGN_FILL);
+  gtk_widget_set_valign(drag_handle, GTK_ALIGN_START);
+  gtk_widget_set_cursor_from_name(drag_handle, "move");
+  gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(drag_handle),
+                                 drag_handle_draw_cb, NULL, NULL);
+
+  GtkGesture *drag_gesture = gtk_gesture_drag_new();
+  g_signal_connect(drag_gesture, "drag-begin", G_CALLBACK(drag_begin_cb),
+                   state);
+  g_signal_connect(drag_gesture, "drag-update", G_CALLBACK(drag_update_cb),
+                   state);
+  gtk_widget_add_controller(drag_handle, GTK_EVENT_CONTROLLER(drag_gesture));
+  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), drag_handle);
+
+  GtkWidget *resize_grip = gtk_drawing_area_new();
+  gtk_widget_set_size_request(resize_grip, RESIZE_GRIP_SIZE, RESIZE_GRIP_SIZE);
+  gtk_widget_set_halign(resize_grip, GTK_ALIGN_END);
+  gtk_widget_set_valign(resize_grip, GTK_ALIGN_END);
+  gtk_widget_set_cursor_from_name(resize_grip, "nwse-resize");
+  gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(resize_grip),
+                                 resize_grip_draw_cb, NULL, NULL);
+
+  GtkGesture *resize_gesture = gtk_gesture_drag_new();
+  g_signal_connect(resize_gesture, "drag-begin", G_CALLBACK(resize_begin_cb),
+                   state);
+  g_signal_connect(resize_gesture, "drag-update", G_CALLBACK(resize_update_cb),
+                   state);
+  gtk_widget_add_controller(resize_grip, GTK_EVENT_CONTROLLER(resize_gesture));
+  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), resize_grip);
+
+  gtk_window_set_child(GTK_WINDOW(window), overlay);
 
   gtk_widget_add_tick_callback(area, tick_cb, NULL, NULL);
+  g_signal_connect_swapped(window, "map", G_CALLBACK(update_input_region),
+                           state);
+  g_signal_connect_swapped(window, "destroy", G_CALLBACK(g_free), state);
 
   gtk_window_present(GTK_WINDOW(window));
 }
