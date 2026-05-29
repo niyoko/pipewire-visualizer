@@ -14,7 +14,6 @@ typedef struct {
   gboolean synced;
   gint64 offset_ms;
   char key[512];
-  char *plain_text;
   GPtrArray *lines;
 } PwvizLyrics;
 

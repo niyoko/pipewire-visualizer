@@ -27,20 +27,20 @@ windows, and is fully click-through.
   width, height, transparency, and click-through input behavior.
 - Configurable bar count or automatic bar count based on window width.
 - Native GTK settings window opened with `Ctrl+Shift+Alt+F12`, with organized
-  Analyzer, Layout, Style, Colour Factory, and Now Playing pages.
+  Analyzer, Layout, Style, Colour Factory, and Now Playing & Lyrics pages.
 - MPRIS Now Playing metadata for player app, track title, artist, and album,
   with configurable displayed fields, strip height, background alpha, font,
   colour, and outline.
 - LRCLIB lyric fetching in a background worker with on-disk JSON cache under
   `~/.cache/pipewire-visualizer/lyrics/`.
 - Synced lyric display with optional two-line karaoke-style output, retained
-  timed blank lyric lines, and `...` shown during the final 3 seconds before
-  lyrics resume after a blank gap.
+  timed blank lyric lines, and a 3/2/1-dot countdown during the final 3 seconds
+  before lyrics resume after a blank gap.
 - Per-song lyric timing offset stored in the cached lyric JSON as
   `pwvizOffsetMs`; adjust it with `Ctrl+Shift+Left` and `Ctrl+Shift+Right` in
   250 ms steps.
-- Separate native font, text colour, outline colour, and outline width settings
-  for Now Playing metadata and lyrics.
+- Separate native font, text colour, outline colour, outline width, and shadow
+  settings for Now Playing metadata, top lyrics, and bottom lyrics.
 
 ## Screen Recording
 
@@ -55,17 +55,17 @@ main visual reference is the Winamp-era
 plug-in, with additional reference from the WACUP
 [vis_classic](https://github.com/WACUP/vis_classic) source release.
 
-The Linux app is not a direct port of the Winamp plug-in. PipeWire capture,
-Wayland layer-shell overlay behavior, GTK4 drawing, configuration storage, and
-packaging are specific to this project. The parts intentionally adapted from
-the original Classic Spectrum Analyzer / WACUP `vis_classic` behavior are:
-
 For years I wanted a similar visualizer that works naturally on Linux with
 system audio from YouTube, Spotify, and other music players instead of
 being locked to one media player. I did not have the time to build it properly.
 In 2026, with AI coding agents advanced enough to help move quickly through
 desktop plumbing, PipeWire capture, FFT tuning, Wayland overlay behavior, and
 packaging, it finally became possible to make this version.
+
+The Linux app is not a direct port of the Winamp plug-in. PipeWire capture,
+Wayland layer-shell overlay behavior, GTK4 drawing, configuration storage, and
+packaging are specific to this project. The parts intentionally adapted from
+the original Classic Spectrum Analyzer / WACUP `vis_classic` behavior are:
 
 - FFT shaping controls: equalization, envelope power, and FFT scale.
 - Spectrum binning: logarithmic bar-bin distribution with a 16 kHz high-end
@@ -155,7 +155,7 @@ is configured; spectrum bars and peaks render with alpha. Use
 Settings include analyzer mode, bar count, WACUP-style FFT equalization,
 envelope and scale, level mode, display threshold, falloff, window anchor,
 margins, size, bar width, spacing, block size, peak behavior, alpha, bar
-opacity, colours, and Now Playing metadata.
+opacity, colours, Now Playing metadata, and lyrics.
 
 The Style page exposes the Winamp-era categories shown by the
 original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,
@@ -168,12 +168,12 @@ The Now Playing section uses MPRIS metadata from the session bus when a player
 provides it. It can show the player app, track title, artist, and album in a
 bottom strip, with configurable visibility, height, metadata font family,
 style, size, metadata colour, outline colour, outline width, and background
-alpha. When lyrics are enabled, the app fetches synced or plain
-lyrics from LRCLIB in a background worker, caches responses on disk, and
-displays the current line plus an optional next line like a karaoke view. Lyrics
-retain timed blank lines, show `...` during the final 3 seconds before lyrics
-resume after a blank gap, and have separate native font, colour, outline colour,
-and outline width settings.
+alpha. When lyrics are enabled, the app fetches synced lyrics from LRCLIB in a
+background worker, caches responses on disk, and displays the current line plus
+an optional next line like a karaoke view. Plain, untimed lyrics are ignored. The
+top and bottom lyric lines have separate font, colour, outline, and shadow
+settings. Lyrics retain timed blank lines and show a 3/2/1-dot countdown during
+the final 3 seconds before lyrics resume after a blank gap.
 Use `Ctrl+Shift+Left` and `Ctrl+Shift+Right` while a song is playing to adjust
 that song's lyric timing offset in 250 ms steps. The offset is stored in that
 song's cached lyric JSON as `pwvizOffsetMs`.

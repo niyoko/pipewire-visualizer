@@ -28,7 +28,6 @@ void pwviz_lyrics_clear(PwvizLyrics *lyrics) {
   lyrics->synced = FALSE;
   lyrics->offset_ms = 0;
   lyrics->key[0] = '\0';
-  g_clear_pointer(&lyrics->plain_text, g_free);
   if (lyrics->lines)
     g_ptr_array_set_size(lyrics->lines, 0);
 }
@@ -37,7 +36,6 @@ void pwviz_lyrics_free(PwvizLyrics *lyrics) {
   if (!lyrics)
     return;
 
-  g_free(lyrics->plain_text);
   if (lyrics->lines)
     g_ptr_array_unref(lyrics->lines);
   g_free(lyrics);
@@ -131,6 +129,16 @@ static PwvizLyricLine *next_text_line(const PwvizLyrics *lyrics,
   return NULL;
 }
 
+static const char *dots_countdown(gint64 remaining_ms) {
+  if (remaining_ms < 0 || remaining_ms > PWVIZ_LYRICS_DOTS_WINDOW_MS)
+    return "";
+  if (remaining_ms > 2000)
+    return "...";
+  if (remaining_ms > 1000)
+    return "..";
+  return ".";
+}
+
 static void add_lrc_line(PwvizLyrics *lyrics, gint64 time_ms,
                          const char *text) {
   PwvizLyricLine *line = g_new0(PwvizLyricLine, 1);
@@ -198,10 +206,8 @@ static PwvizLyrics *parse_lyrics_json(const char *json_data, const char *key) {
   JsonObject *object = json_node_get_object(root);
   const char *synced = json_object_get_string_member_with_default(
       object, "syncedLyrics", NULL);
-  const char *plain = json_object_get_string_member_with_default(
-      object, "plainLyrics", NULL);
 
-  if ((!synced || synced[0] == '\0') && (!plain || plain[0] == '\0')) {
+  if (!synced || synced[0] == '\0') {
     g_object_unref(parser);
     return NULL;
   }
@@ -217,10 +223,13 @@ static PwvizLyrics *parse_lyrics_json(const char *json_data, const char *key) {
 
   if (synced && synced[0] != '\0')
     parse_synced_lyrics(lyrics, synced);
-  if (plain && plain[0] != '\0')
-    lyrics->plain_text = g_strdup(plain);
 
   g_object_unref(parser);
+  if (!lyrics->synced || !lyrics->lines || lyrics->lines->len == 0) {
+    pwviz_lyrics_free(lyrics);
+    return NULL;
+  }
+
   return lyrics;
 }
 
@@ -347,22 +356,18 @@ void pwviz_lyrics_current_lines(const PwvizLyrics *lyrics, gint64 position_us,
 
     if (active < 0) {
       PwvizLyricLine *upcoming = next_text_line(lyrics, 0);
-      *current = upcoming &&
-                         upcoming->time_ms - position_ms <=
-                             PWVIZ_LYRICS_DOTS_WINDOW_MS
-                     ? "..."
-                     : "";
+      *current = upcoming ? dots_countdown(upcoming->time_ms - position_ms)
+                          : "";
+      *next = upcoming ? upcoming->text : NULL;
       return;
     }
 
     PwvizLyricLine *line = g_ptr_array_index(lyrics->lines, active);
     if (!lyric_line_has_text(line)) {
       PwvizLyricLine *upcoming = next_text_line(lyrics, active + 1);
-      *current = upcoming &&
-                         upcoming->time_ms - position_ms <=
-                             PWVIZ_LYRICS_DOTS_WINDOW_MS
-                     ? "..."
-                     : "";
+      *current = upcoming ? dots_countdown(upcoming->time_ms - position_ms)
+                          : "";
+      *next = upcoming ? upcoming->text : NULL;
       return;
     }
 
@@ -374,8 +379,6 @@ void pwviz_lyrics_current_lines(const PwvizLyrics *lyrics, gint64 position_us,
     return;
   }
 
-  if (lyrics->plain_text)
-    *current = lyrics->plain_text;
 }
 
 gboolean pwviz_lyrics_adjust_offset(PwvizLyrics *lyrics, gint64 delta_ms) {
