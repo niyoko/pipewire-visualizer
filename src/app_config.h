@@ -15,6 +15,7 @@ typedef struct {
   int block_gap;
   int peak_hold_frames;
   float peak_fall_per_frame;
+  float display_threshold;
   double background_alpha;
   gboolean show_border;
   GdkRGBA low_color;

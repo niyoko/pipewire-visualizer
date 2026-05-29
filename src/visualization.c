@@ -87,10 +87,15 @@ static void update_spectrum(PwvizVisualizer *visualizer) {
   for (int i = 0; i < PWVIZ_BAR_COUNT; i++) {
     float value = visualizer->levels[i];
 
+    if (value < visualizer->config.display_threshold)
+      value = 0.0f;
+
     if (value > visualizer->bars[i])
       visualizer->bars[i] = visualizer->bars[i] * 0.4f + value * 0.6f;
-    else
-      visualizer->bars[i] = visualizer->bars[i] * 0.85f + value * 0.15f;
+    else {
+      float falloff = value > 0.0f ? 0.85f : 0.6f;
+      visualizer->bars[i] = visualizer->bars[i] * falloff + value * 0.15f;
+    }
   }
 }
 
@@ -277,6 +282,13 @@ static void peak_fall_changed_cb(GtkRange *range, gpointer data) {
   visualizer->config.peak_fall_per_frame = gtk_range_get_value(range);
 }
 
+static void display_threshold_changed_cb(GtkRange *range, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.display_threshold = gtk_range_get_value(range);
+  queue_visualizer_draw(visualizer);
+}
+
 static void alpha_changed_cb(GtkRange *range, gpointer data) {
   PwvizVisualizer *visualizer = data;
 
@@ -344,6 +356,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   GtkWidget *peak_hold = gtk_spin_button_new_with_range(0, 120, 1);
   GtkWidget *peak_fall =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.001, 0.08, 0.001);
+  GtkWidget *display_threshold =
+      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 0.5, 0.01);
 
   gtk_check_button_set_group(GTK_CHECK_BUTTON(peak), GTK_CHECK_BUTTON(bars));
   gtk_check_button_set_group(GTK_CHECK_BUTTON(flash), GTK_CHECK_BUTTON(bars));
@@ -369,6 +383,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                             visualizer->config.peak_hold_frames);
   gtk_range_set_value(GTK_RANGE(peak_fall),
                       visualizer->config.peak_fall_per_frame);
+  gtk_range_set_value(GTK_RANGE(display_threshold),
+                      visualizer->config.display_threshold);
 
   g_signal_connect(bars, "toggled", G_CALLBACK(analyzer_mode_toggled_cb),
                    visualizer);
@@ -382,6 +398,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                    G_CALLBACK(peak_hold_changed_cb), visualizer);
   g_signal_connect(peak_fall, "value-changed",
                    G_CALLBACK(peak_fall_changed_cb), visualizer);
+  g_signal_connect(display_threshold, "value-changed",
+                   G_CALLBACK(display_threshold_changed_cb), visualizer);
 
   gtk_box_append(GTK_BOX(box), bars);
   gtk_box_append(GTK_BOX(box), peak);
@@ -389,6 +407,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   gtk_box_append(GTK_BOX(box), control_row("Bars", bar_count));
   gtk_box_append(GTK_BOX(box), control_row("Peak hold", peak_hold));
   gtk_box_append(GTK_BOX(box), control_row("Peak fall speed", peak_fall));
+  gtk_box_append(GTK_BOX(box),
+                 control_row("Display threshold", display_threshold));
   return box;
 }
 

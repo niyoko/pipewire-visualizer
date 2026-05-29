@@ -61,6 +61,7 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->block_gap = 2;
   config->peak_hold_frames = PWVIZ_PEAK_HOLD_FRAMES;
   config->peak_fall_per_frame = PWVIZ_PEAK_FALL_PER_FRAME;
+  config->display_threshold = 0.08f;
   config->background_alpha = 0.0;
   config->show_border = TRUE;
   set_rgba(&config->low_color, 0.45, 0.0, 0.0, 1.0);
@@ -149,6 +150,11 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
         CLAMP(g_key_file_get_double(key_file, "Analyzer", "peak_fall_per_frame",
                                     NULL),
               0.001, 0.08);
+  if (has_key(key_file, "Analyzer", "display_threshold"))
+    config->display_threshold =
+        CLAMP(g_key_file_get_double(key_file, "Analyzer", "display_threshold",
+                                    NULL),
+              0.0, 0.5);
 
   if (has_key(key_file, "Style", "block_height"))
     config->block_height =
@@ -199,6 +205,8 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
                          config->peak_hold_frames);
   g_key_file_set_double(key_file, "Analyzer", "peak_fall_per_frame",
                         config->peak_fall_per_frame);
+  g_key_file_set_double(key_file, "Analyzer", "display_threshold",
+                        config->display_threshold);
 
   g_key_file_set_integer(key_file, "Style", "block_height",
                          config->block_height);

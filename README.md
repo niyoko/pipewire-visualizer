@@ -101,8 +101,8 @@ cp data/pipewire-visualizer-autostart.desktop \
 The overlay window background and border are fully transparent; only the
 spectrum bars and peaks render with alpha. Use `Ctrl+Shift+Alt+F12` to open the
 settings window.
-Settings include analyzer mode, bar count, block size, peak behavior, alpha,
-colours, and built-in colour profiles.
+Settings include analyzer mode, bar count, display threshold, block size, peak
+behavior, alpha, colours, and built-in colour profiles.
 
 Settings are saved to:
 
