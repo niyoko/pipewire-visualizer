@@ -17,12 +17,18 @@
 #define RESIZE_GRIP_SIZE 28
 #define MIN_WINDOW_WIDTH 240
 #define MIN_WINDOW_HEIGHT 90
+#define SPECTRUM_TOP_PADDING 28
+#define SPECTRUM_BOTTOM_PADDING 6
+#define PEAK_HOLD_FRAMES 8
+#define PEAK_FALL_PER_FRAME 0.012f
 
 static float ring[RING_SIZE];
 static int ring_write = 0;
 static pthread_mutex_t ring_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static float bars[BAR_COUNT];
+static float peak_caps[BAR_COUNT];
+static int peak_holds[BAR_COUNT];
 
 static struct pw_stream *stream;
 
@@ -203,18 +209,65 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
 
   calculate_fft();
 
-  cairo_set_source_rgba(cr, 0.02, 0.02, 0.02, 0.35);
+  cairo_set_source_rgba(cr, 0.015, 0.010, 0.008, 0.46);
   cairo_paint(cr);
 
+  double visual_top = SPECTRUM_TOP_PADDING;
+  double visual_bottom = height - SPECTRUM_BOTTOM_PADDING;
+  double visual_height = visual_bottom - visual_top;
   double bar_w = (double)width / BAR_COUNT;
+  double block_h = 4.0;
+  double block_gap = 2.0;
+
+  if (visual_height <= block_h)
+    return;
+
+  cairo_set_source_rgba(cr, 1.0, 0.78, 0.18, 0.32);
+  cairo_set_line_width(cr, 1.0);
+  cairo_rectangle(cr, 0.5, visual_top - 0.5, width - 1.0,
+                  visual_height + 1.0);
+  cairo_stroke(cr);
 
   for (int i = 0; i < BAR_COUNT; i++) {
-    double h = bars[i] * height;
-    double x = i * bar_w;
-    double y = height - h;
+    if (bars[i] > peak_caps[i]) {
+      peak_caps[i] = bars[i];
+      peak_holds[i] = PEAK_HOLD_FRAMES;
+    } else if (peak_holds[i] > 0) {
+      peak_holds[i]--;
+    } else {
+      peak_caps[i] = MAX(0.0f, peak_caps[i] - PEAK_FALL_PER_FRAME);
+    }
 
-    cairo_set_source_rgba(cr, 0.0, 0.9, 1.0, 0.88);
-    cairo_rectangle(cr, x + 1, y, bar_w - 2, h);
+    double h = bars[i] * visual_height;
+    double x = i * bar_w;
+    double lit_top = visual_bottom - h;
+    double block_w = MAX(1.0, bar_w - 2.0);
+
+    for (double y = visual_bottom - block_h; y >= visual_top;
+         y -= block_h + block_gap) {
+      double level = (visual_bottom - y) / visual_height;
+      gboolean lit = y >= lit_top;
+
+      double red = 0.40 + 0.60 * level;
+      double green = 0.02 + 0.84 * level;
+      double blue = 0.0;
+      double alpha = lit ? 0.94 : 0.14;
+
+      cairo_set_source_rgba(cr, red, green, blue, alpha);
+      cairo_rectangle(cr, x + 1.0, y, block_w, block_h);
+      cairo_fill(cr);
+    }
+
+    double peak_y = visual_bottom - peak_caps[i] * visual_height;
+    double snapped_peak_y =
+        visual_bottom -
+        floor((visual_bottom - peak_y) / (block_h + block_gap)) *
+            (block_h + block_gap);
+
+    cairo_set_source_rgba(cr, 1.0, 0.92, 0.20, 0.96);
+    cairo_rectangle(cr, x + 1.0,
+                    CLAMP(snapped_peak_y, visual_top, visual_bottom - block_h),
+                    block_w, block_h);
     cairo_fill(cr);
   }
 }
