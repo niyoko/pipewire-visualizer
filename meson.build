@@ -14,8 +14,10 @@ deps = [
 
 sources = [
   'src/audio_buffer.c',
+  'src/app_config.c',
   'src/binning.c',
   'src/fft.c',
+  'src/global_shortcut.c',
   'src/main.c',
   'src/pipewire_sink.c',
   'src/visualization.c',

@@ -6,13 +6,12 @@ draws a GTK4 spectrum bar display.
 
 The project is intentionally small and split into focused C modules for
 PipeWire capture, the shared audio buffer, FFT analysis, spectrum binning, and
-GTK visualization. Runtime dependencies are PipeWire, GTK4, gtk4-layer-shell,
-FFTW, and libspa.
+GTK visualization/configuration. Runtime dependencies are PipeWire, GTK4,
+gtk4-layer-shell, FFTW, and libspa.
 
 The window is designed for Wayland compositors that support the wlr-layer-shell
 protocol. It runs as a semitransparent overlay layer surface, stays above normal
-windows, and is click-through except for its top drag handle and bottom-right
-resize grip.
+windows, and is fully click-through.
 
 ## Requirements
 
@@ -43,6 +42,20 @@ meson compile -C build
 
 If there is no visible activity, make sure PipeWire is running and that an audio
 stream is currently playing.
+
+## Configuration
+
+The overlay window background and border are fully transparent; only the
+spectrum bars and peaks render with alpha. Use `Ctrl+Shift+Alt+F12` to open the
+settings window.
+Settings include analyzer mode, bar count, block size, peak behavior, alpha,
+colours, and built-in colour profiles.
+
+Settings are saved to:
+
+```text
+~/.config/pwviz/config.ini
+```
 
 ## Disclaimer
 

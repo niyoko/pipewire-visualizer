@@ -5,8 +5,9 @@
 
 #define SPECTRUM_MIN_BIN 1
 #define SPECTRUM_MAX_HZ 16000
-#define SPECTRUM_NOISE_FLOOR_DB -78.0f
-#define SPECTRUM_RANGE_DB 62.0f
+#define SPECTRUM_NOISE_FLOOR_DB -86.0f
+#define SPECTRUM_CEILING_DB -6.0f
+#define SPECTRUM_RANGE_DB (SPECTRUM_CEILING_DB - SPECTRUM_NOISE_FLOOR_DB)
 
 static int assign_bin_count(int not_assigned, double divisor) {
   int count = (int)(not_assigned - not_assigned / divisor + 0.5);
@@ -76,12 +77,12 @@ void pwviz_binner_calculate(PwvizBinner *binner, const float *magnitudes,
     bin = end_bin;
 
     float rms = count > 0 ? sqrtf(sum_sq / count) : 0.0f;
-    float mixed = MAX(peak * 0.72f, rms);
+    float mixed = MAX(peak * 0.38f, rms);
     float db =
         20.0f * log10f(mixed / (float)(PWVIZ_FFT_SIZE / 2) + 0.000001f);
     float value = (db - SPECTRUM_NOISE_FLOOR_DB) / SPECTRUM_RANGE_DB;
 
     value = CLAMP(value, 0.0f, 1.0f);
-    levels[b] = powf(value, 0.62f);
+    levels[b] = powf(value, 0.82f);
   }
 }
