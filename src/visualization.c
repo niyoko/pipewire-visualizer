@@ -820,6 +820,17 @@ static gboolean clear_audio_levels(PwvizVisualizer *visualizer) {
   return changed;
 }
 
+static gboolean levels_have_visible_signal(PwvizVisualizer *visualizer) {
+  int bar_count = effective_bar_count(visualizer, visualizer->width);
+
+  for (int i = 0; i < bar_count; i++) {
+    if (visualizer->levels[i] >= visualizer->config.display_threshold)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
 static gboolean update_spectrum(PwvizVisualizer *visualizer) {
   pwviz_audio_buffer_copy_latest(visualizer->audio_buffer,
                                  visualizer->fft_samples, PWVIZ_FFT_SIZE);
@@ -837,7 +848,7 @@ static gboolean update_spectrum(PwvizVisualizer *visualizer) {
       effective_bar_count(visualizer, visualizer->width);
   pwviz_binner_calculate(&visualizer->binner, visualizer->magnitudes,
                          visualizer->levels, &analysis_config);
-  return TRUE;
+  return levels_have_visible_signal(visualizer);
 }
 
 static gboolean update_bars(PwvizVisualizer *visualizer) {
@@ -1124,11 +1135,18 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
   }
   update_input_region(visualizer);
 
+  if (visualizer->audio_silent) {
+    cairo_save(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_restore(cr);
+    return;
+  }
+
   if (visualizer->spectrum_surface_dirty)
     update_spectrum_surface(visualizer);
   draw_spectrum(visualizer, cr);
-  if (!visualizer->audio_silent)
-    draw_now_playing(visualizer, cr, width, height);
+  draw_now_playing(visualizer, cr, width, height);
 }
 
 static gboolean animation_frame_cb(gpointer data) {
@@ -1252,13 +1270,34 @@ static void maybe_start_lyrics_fetch(PwvizVisualizer *visualizer) {
   g_thread_unref(g_thread_new("lyrics-fetch", lyrics_fetch_thread, fetch));
 }
 
+static gboolean same_now_playing_track(const PwvizNowPlaying *a,
+                                       const PwvizNowPlaying *b) {
+  return a->available && b->available && a->duration_us == b->duration_us &&
+         g_strcmp0(a->app, b->app) == 0 &&
+         g_strcmp0(a->title, b->title) == 0 &&
+         g_strcmp0(a->artist, b->artist) == 0 &&
+         g_strcmp0(a->album, b->album) == 0;
+}
+
+static void refresh_now_playing(PwvizVisualizer *visualizer) {
+  PwvizNowPlaying previous = visualizer->now_playing;
+
+  if (!pwviz_now_playing_refresh(&visualizer->now_playing))
+    return;
+
+  if (visualizer->now_playing.status == PWVIZ_PLAYBACK_PAUSED &&
+      previous.status == PWVIZ_PLAYBACK_PAUSED &&
+      same_now_playing_track(&previous, &visualizer->now_playing))
+    visualizer->now_playing.position_us = previous.position_us;
+}
+
 static gboolean now_playing_refresh_cb(gpointer data) {
   PwvizVisualizer *visualizer = data;
   gboolean was_available = visualizer->now_playing.available;
 
   poll_lyrics_results(visualizer);
   if (visualizer->config.now_playing_enabled) {
-    pwviz_now_playing_refresh(&visualizer->now_playing);
+    refresh_now_playing(visualizer);
     maybe_start_lyrics_fetch(visualizer);
   } else {
     pwviz_now_playing_clear(&visualizer->now_playing);
@@ -1552,7 +1591,7 @@ static void now_playing_enabled_toggled_cb(GtkCheckButton *button,
 
   visualizer->config.now_playing_enabled = gtk_check_button_get_active(button);
   if (visualizer->config.now_playing_enabled)
-    pwviz_now_playing_refresh(&visualizer->now_playing);
+    refresh_now_playing(visualizer);
   else
     pwviz_now_playing_clear(&visualizer->now_playing);
   maybe_start_lyrics_fetch(visualizer);
@@ -2948,7 +2987,7 @@ static void visualizer_init(PwvizVisualizer *visualizer,
   visualizer->height = visualizer->config.window_height;
   visualizer->audio_silent = TRUE;
   if (visualizer->config.now_playing_enabled) {
-    pwviz_now_playing_refresh(&visualizer->now_playing);
+    refresh_now_playing(visualizer);
     maybe_start_lyrics_fetch(visualizer);
   }
   pwviz_fft_init(&visualizer->fft);

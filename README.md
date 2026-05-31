@@ -10,8 +10,8 @@ GTK visualization/configuration. Runtime dependencies are PipeWire, GTK4,
 gtk4-layer-shell, FFTW, JSON-GLib, libsoup 3, and libspa.
 
 The window is designed for Wayland compositors that support the wlr-layer-shell
-protocol. It runs as a semitransparent overlay layer surface, stays above normal
-windows, and is fully click-through.
+protocol. It runs as a transparent overlay layer surface with alpha-rendered
+content, stays above normal windows, and is fully click-through.
 
 ## Features
 
@@ -21,16 +21,24 @@ windows, and is fully click-through.
   Visualizer-style equalization, envelope, scale, logarithmic binning,
   peak/average bar levels, falloff, target FPS, and peak motion controls.
 - Classic Spectrum Analyzer inspired visuals, including frequency bar styles,
-  background modes, peak colour modes, peak motion modes, block geometry, alpha
-  controls, and configurable colours.
+  peak colour modes, peak motion modes, block geometry, alpha controls, and
+  configurable colours.
+- Transparent-only overlay rendering. When audio is silent or below the display
+  threshold, FFT analysis is skipped where possible, bars and peak indicators
+  are cleared immediately, and the window becomes fully transparent.
+- Retained spectrum rendering with dirty-column redraws, precomputed block
+  positions, cached colours, cached Now Playing layout height, and skipped GTK
+  redraws when the visible spectrum state has not changed.
 - Wayland layer-shell overlay window with configurable anchor, X/Y margins,
-  width, height, transparency, and click-through input behavior.
+  width, height, and click-through input behavior.
 - Configurable bar count or automatic bar count based on window width.
 - Native GTK settings window opened with `Ctrl+Shift+Alt+F12`, with organized
   Analyzer, Layout, Style, Colour Factory, and Now Playing & Lyrics pages.
 - MPRIS Now Playing metadata for player app, track title, artist, and album,
-  with configurable displayed fields, strip height, background alpha, font,
-  colour, and outline.
+  with playback status icon, elapsed/total timer when available, configurable
+  displayed fields, compact metadata-only layout when lyrics are unavailable,
+  strip height, background alpha, font, colour, and outline. The displayed timer
+  freezes while playback is paused.
 - LRCLIB lyric fetching in a background worker with on-disk JSON cache under
   `~/.cache/pipewire-visualizer/lyrics/`.
 - Synced lyric display with optional two-line karaoke-style output, retained
@@ -73,8 +81,8 @@ the original Classic Spectrum Analyzer / WACUP `vis_classic` behavior are:
 - Bar level calculation: selectable peak or average level per bar using
   0..255-style spectrum levels.
 - Motion controls: bar falloff rate and peak change behavior.
-- Classic visualizer setting categories: frequency bar style, background mode,
-  peak colour behavior, and peak motion options.
+- Classic visualizer setting categories: frequency bar style, peak colour
+  behavior, and peak motion options.
 - Visual geometry conventions: bar width, horizontal spacing, vertical block
   spacing, and analyzer defaults.
 
@@ -149,9 +157,9 @@ cp data/pipewire-visualizer-autostart.desktop \
 
 ## Configuration
 
-The overlay window background is transparent unless a background mode or alpha
-is configured; spectrum bars and peaks render with alpha. Use
-`Ctrl+Shift+Alt+F12` to open the settings window.
+The overlay window background is always transparent; spectrum bars and peaks
+render with alpha over the desktop. Use `Ctrl+Shift+Alt+F12` to open the
+settings window.
 Settings include analyzer mode, bar count, WACUP-style FFT equalization,
 envelope and scale, level mode, display threshold, target FPS, falloff, window
 anchor, margins, size, bar width, spacing, block size, peak behavior, alpha,
@@ -159,16 +167,20 @@ bar opacity, colours, Now Playing metadata, and lyrics.
 
 The Style page exposes the Winamp-era categories shown by the
 original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,
-`Solid Lines`, `Winamp Fire`, `Random`), Background (`Black`, `Grid`,
-`Solid Colour`, `Flash`, `Flash Grid`), Peak Colour (`Fade`, `Level`,
+`Solid Lines`, `Winamp Fire`, `Random`), Peak Colour (`Fade`, `Level`,
 `Level & Fade`), and Motion (`Normal`, `Fall`, `Rise`, `Fall & Rise`,
-`Rise Fall`, `Sparks`).
+`Rise Fall`, `Sparks`). Peak indicators are drawn as thin caps aligned to the
+same block grid as the bars, so they stay visually separate when they meet the
+lit bar stack.
 
 The Now Playing section uses MPRIS metadata from the session bus when a player
 provides it. It can show the player app, track title, artist, and album in a
-bottom strip, with configurable visibility, height, metadata font family,
-style, size, metadata colour, outline colour, outline width, and background
-alpha. When lyrics are enabled, the app fetches synced lyrics from LRCLIB in a
+bottom strip, prefixed by playback status and an elapsed/total timer when the
+player provides duration. The strip has configurable visibility, height,
+metadata font family, style, size, metadata colour, outline colour, outline
+width, and background alpha. If lyrics are disabled, unavailable, or fail to
+load, the strip compacts to the metadata row instead of reserving an empty lyric
+row. When lyrics are enabled, the app fetches synced lyrics from LRCLIB in a
 background worker, caches responses on disk, and displays the current line plus
 an optional next line like a karaoke view. Plain, untimed lyrics are ignored. The
 top and bottom lyric lines have separate font, colour, outline, and shadow
@@ -177,6 +189,12 @@ the final 3 seconds before lyrics resume after a blank gap.
 Use `Ctrl+Shift+Left` and `Ctrl+Shift+Right` while a song is playing to adjust
 that song's lyric timing offset in 250 ms steps. The offset is stored in that
 song's cached lyric JSON as `pwvizOffsetMs`.
+
+When the latest audio buffer is silent, the visualizer skips FFT analysis,
+clears bar and peak state, skips Now Playing drawing, and clears the GTK drawing
+target. If FFT does run but all calculated levels are below the configured
+display threshold, that frame is also treated as silent so no peak caps remain
+visible.
 
 Settings are saved to:
 
