@@ -13,6 +13,15 @@
 #include <math.h>
 #include <pango/pangocairo.h>
 
+#define COLOR_CACHE_LEVELS 256
+
+typedef struct {
+  double red;
+  double green;
+  double blue;
+  double alpha;
+} CachedColor;
+
 typedef struct {
   GtkWindow *window;
   GtkWindow *config_window;
@@ -30,6 +39,8 @@ typedef struct {
   float levels[PWVIZ_BAR_COUNT];
   float bars[PWVIZ_BAR_COUNT];
   float peak_caps[PWVIZ_BAR_COUNT];
+  CachedColor style_colors[PWVIZ_BAR_COUNT][COLOR_CACHE_LEVELS];
+  CachedColor peak_colors[PWVIZ_BAR_COUNT][COLOR_CACHE_LEVELS];
   int peak_holds[PWVIZ_BAR_COUNT];
   cairo_surface_t *now_playing_surface;
   char *now_playing_cache_key;
@@ -41,6 +52,7 @@ typedef struct {
   char lyrics_key[512];
   char lyrics_fetching_key[512];
   char lyrics_offset_message[64];
+  gboolean color_cache_valid;
   gboolean destroying;
   int width;
   int height;
@@ -454,6 +466,36 @@ static void peak_color(PwvizVisualizer *visualizer, int bar_index,
   }
 }
 
+static int color_level_index(double level) {
+  return CLAMP((int)(level * (COLOR_CACHE_LEVELS - 1) + 0.5), 0,
+               COLOR_CACHE_LEVELS - 1);
+}
+
+static void invalidate_color_cache(PwvizVisualizer *visualizer) {
+  if (visualizer)
+    visualizer->color_cache_valid = FALSE;
+}
+
+static void ensure_color_cache(PwvizVisualizer *visualizer) {
+  if (visualizer->color_cache_valid)
+    return;
+
+  for (int bar = 0; bar < PWVIZ_BAR_COUNT; bar++) {
+    for (int i = 0; i < COLOR_CACHE_LEVELS; i++) {
+      double level = (double)i / (COLOR_CACHE_LEVELS - 1);
+      CachedColor *style = &visualizer->style_colors[bar][i];
+      CachedColor *peak = &visualizer->peak_colors[bar][i];
+
+      style_color(visualizer, bar, level, &style->red, &style->green,
+                  &style->blue, &style->alpha);
+      peak_color(visualizer, bar, level, &peak->red, &peak->green,
+                 &peak->blue, &peak->alpha);
+    }
+  }
+
+  visualizer->color_cache_valid = TRUE;
+}
+
 static void append_now_playing_part(GString *line, const char *text) {
   if (!text || text[0] == '\0')
     return;
@@ -740,7 +782,9 @@ static void update_spectrum(PwvizVisualizer *visualizer) {
       effective_bar_count(visualizer, visualizer->width);
   pwviz_binner_calculate(&visualizer->binner, visualizer->magnitudes,
                          visualizer->levels, &analysis_config);
+}
 
+static void update_bars(PwvizVisualizer *visualizer) {
   int bar_count = effective_bar_count(visualizer, visualizer->width);
   float falloff = visualizer->config.falloff_rate / 255.0f;
 
@@ -783,6 +827,8 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
   if (visual_height <= block_h)
     return;
 
+  ensure_color_cache(visualizer);
+
   for (int i = 0; i < bar_count; i++) {
     double bar_value = visualizer->config.analyzer_mode == PWVIZ_ANALYZER_PEAK
                            ? visualizer->peak_caps[i]
@@ -799,26 +845,23 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
          y -= block_h + block_gap) {
       double level = (visual_bottom - y) / visual_height;
       gboolean lit = y >= lit_top;
+      CachedColor *color =
+          &visualizer->style_colors[i][color_level_index(level)];
       if (!lit && !flash_lit && INACTIVE_BAR_ALPHA <= 0)
         continue;
 
-      double red;
-      double green;
-      double blue;
-      double source_alpha;
-      style_color(visualizer, i, level, &red, &green, &blue, &source_alpha);
       double alpha = pct_alpha(INACTIVE_BAR_ALPHA);
 
       if (flash_lit)
         alpha = color_alpha(visualizer->config.bar_alpha,
                             visualizer->config.high_color.alpha);
       else if (lit)
-        alpha = color_alpha(visualizer->config.bar_alpha, source_alpha);
+        alpha = color_alpha(visualizer->config.bar_alpha, color->alpha);
 
       if (alpha <= 0.0)
         continue;
 
-      cairo_set_source_rgba(cr, red, green, blue, alpha);
+      cairo_set_source_rgba(cr, color->red, color->green, color->blue, alpha);
       cairo_rectangle(cr, bar_x, y, block_w, block_h);
       cairo_fill(cr);
     }
@@ -836,16 +879,13 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
     double peak_block_y =
         CLAMP(snapped_peak_y, visual_top, visual_bottom - block_h);
     double peak_level = visualizer->peak_caps[i];
-    double peak_red;
-    double peak_green;
-    double peak_blue;
-    double peak_source_alpha;
-    peak_color(visualizer, i, peak_level, &peak_red, &peak_green, &peak_blue,
-               &peak_source_alpha);
+    CachedColor *peak_color =
+        &visualizer->peak_colors[i][color_level_index(peak_level)];
     double peak_alpha =
-        color_alpha(visualizer->config.bar_alpha, peak_source_alpha);
+        color_alpha(visualizer->config.bar_alpha, peak_color->alpha);
 
-    cairo_set_source_rgba(cr, peak_red, peak_green, peak_blue, peak_alpha);
+    cairo_set_source_rgba(cr, peak_color->red, peak_color->green,
+                          peak_color->blue, peak_alpha);
     cairo_rectangle(cr, bar_x, peak_block_y, block_w, block_h);
     cairo_fill(cr);
   }
@@ -873,6 +913,7 @@ static gboolean animation_frame_cb(gpointer data) {
     return G_SOURCE_REMOVE;
 
   update_spectrum(visualizer);
+  update_bars(visualizer);
   update_peak_caps(visualizer, effective_bar_count(visualizer,
                                                    visualizer->width));
   queue_visualizer_draw(visualizer);
@@ -1079,12 +1120,14 @@ static void classic_option_toggled_cb(GtkCheckButton *button, gpointer data) {
   switch (target) {
   case CLASSIC_OPTION_BAR_STYLE:
     visualizer->config.bar_style = value;
+    invalidate_color_cache(visualizer);
     break;
   case CLASSIC_OPTION_BACKGROUND:
     visualizer->config.background_mode = value;
     break;
   case CLASSIC_OPTION_PEAK_COLOR:
     visualizer->config.peak_color_mode = value;
+    invalidate_color_cache(visualizer);
     break;
   case CLASSIC_OPTION_PEAK_MOTION:
     visualizer->config.peak_motion = value;
@@ -1458,12 +1501,15 @@ static void color_changed_cb(GtkColorButton *button, gpointer data) {
   switch (binding->target) {
   case COLOR_LOW:
     binding->visualizer->config.low_color = color;
+    invalidate_color_cache(binding->visualizer);
     break;
   case COLOR_HIGH:
     binding->visualizer->config.high_color = color;
+    invalidate_color_cache(binding->visualizer);
     break;
   case COLOR_PEAK:
     binding->visualizer->config.peak_color = color;
+    invalidate_color_cache(binding->visualizer);
     break;
   case COLOR_BACKGROUND:
     binding->visualizer->config.background_color = color;
@@ -2375,6 +2421,7 @@ static gboolean config_close_request_cb(GtkWindow *window, gpointer data) {
   apply_window_geometry(visualizer);
   apply_layer_position(visualizer);
   restart_animation_source(visualizer);
+  invalidate_color_cache(visualizer);
   queue_visualizer_draw(visualizer);
   visualizer->config_window = NULL;
   return FALSE;
@@ -2410,6 +2457,7 @@ static void config_cancel_clicked_cb(GtkButton *button, gpointer data) {
   apply_window_geometry(visualizer);
   apply_layer_position(visualizer);
   restart_animation_source(visualizer);
+  invalidate_color_cache(visualizer);
   queue_visualizer_draw(visualizer);
   gtk_window_destroy(visualizer->config_window);
 }
