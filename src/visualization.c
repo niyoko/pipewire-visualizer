@@ -14,6 +14,7 @@
 #include <pango/pangocairo.h>
 
 #define COLOR_CACHE_LEVELS 256
+#define SILENCE_SAMPLE_THRESHOLD 0.00001f
 
 typedef struct {
   double red;
@@ -70,6 +71,7 @@ typedef struct {
   char lyrics_fetching_key[512];
   char lyrics_offset_message[64];
   gboolean color_cache_valid;
+  gboolean audio_silent;
   gboolean destroying;
   int width;
   int height;
@@ -790,9 +792,43 @@ static void update_input_region(PwvizVisualizer *visualizer) {
   cairo_region_destroy(region);
 }
 
-static void update_spectrum(PwvizVisualizer *visualizer) {
+static gboolean samples_are_silent(const float *samples, int count) {
+  for (int i = 0; i < count; i++) {
+    if (fabsf(samples[i]) > SILENCE_SAMPLE_THRESHOLD)
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean clear_audio_levels(PwvizVisualizer *visualizer) {
+  gboolean changed = FALSE;
+
+  for (int i = 0; i < PWVIZ_BAR_COUNT; i++) {
+    if (visualizer->levels[i] != 0.0f || visualizer->bars[i] != 0.0f ||
+        visualizer->peak_caps[i] != 0.0f || visualizer->peak_holds[i] != 0) {
+      visualizer->dirty_bars[i] = TRUE;
+      changed = TRUE;
+    }
+
+    visualizer->levels[i] = 0.0f;
+    visualizer->bars[i] = 0.0f;
+    visualizer->peak_caps[i] = 0.0f;
+    visualizer->peak_holds[i] = 0;
+  }
+
+  return changed;
+}
+
+static gboolean update_spectrum(PwvizVisualizer *visualizer) {
   pwviz_audio_buffer_copy_latest(visualizer->audio_buffer,
                                  visualizer->fft_samples, PWVIZ_FFT_SIZE);
+  if (samples_are_silent(visualizer->fft_samples, PWVIZ_FFT_SIZE)) {
+    for (int i = 0; i < PWVIZ_BAR_COUNT; i++)
+      visualizer->levels[i] = 0.0f;
+    return FALSE;
+  }
+
   pwviz_fft_analyze(&visualizer->fft, visualizer->fft_samples,
                     visualizer->magnitudes, visualizer->config.fft_equalize,
                     visualizer->config.fft_envelope);
@@ -801,6 +837,7 @@ static void update_spectrum(PwvizVisualizer *visualizer) {
       effective_bar_count(visualizer, visualizer->width);
   pwviz_binner_calculate(&visualizer->binner, visualizer->magnitudes,
                          visualizer->levels, &analysis_config);
+  return TRUE;
 }
 
 static gboolean update_bars(PwvizVisualizer *visualizer) {
@@ -1090,7 +1127,8 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
   if (visualizer->spectrum_surface_dirty)
     update_spectrum_surface(visualizer);
   draw_spectrum(visualizer, cr);
-  draw_now_playing(visualizer, cr, width, height);
+  if (!visualizer->audio_silent)
+    draw_now_playing(visualizer, cr, width, height);
 }
 
 static gboolean animation_frame_cb(gpointer data) {
@@ -1102,14 +1140,25 @@ static gboolean animation_frame_cb(gpointer data) {
   for (int i = 0; i < PWVIZ_BAR_COUNT; i++)
     visualizer->dirty_bars[i] = FALSE;
 
-  update_spectrum(visualizer);
+  gboolean was_silent = visualizer->audio_silent;
+  gboolean has_signal = update_spectrum(visualizer);
+  visualizer->audio_silent = !has_signal;
+
+  if (!has_signal) {
+    gboolean levels_changed = clear_audio_levels(visualizer);
+    gboolean surface_changed = update_spectrum_surface(visualizer);
+    if (levels_changed || surface_changed || !was_silent)
+      queue_visualizer_draw(visualizer);
+    return G_SOURCE_CONTINUE;
+  }
+
   gboolean bars_changed = update_bars(visualizer);
   gboolean peaks_changed = update_peak_caps(visualizer, effective_bar_count(
                                                             visualizer,
                                                             visualizer->width));
   gboolean surface_changed = update_spectrum_surface(visualizer);
 
-  if (bars_changed || peaks_changed || surface_changed)
+  if (bars_changed || peaks_changed || surface_changed || was_silent)
     queue_visualizer_draw(visualizer);
 
   return G_SOURCE_CONTINUE;
@@ -2897,6 +2946,7 @@ static void visualizer_init(PwvizVisualizer *visualizer,
   visualizer->config_snapshot = visualizer->config;
   visualizer->width = visualizer->config.window_width;
   visualizer->height = visualizer->config.window_height;
+  visualizer->audio_silent = TRUE;
   if (visualizer->config.now_playing_enabled) {
     pwviz_now_playing_refresh(&visualizer->now_playing);
     maybe_start_lyrics_fetch(visualizer);
