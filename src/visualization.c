@@ -1045,12 +1045,10 @@ static void draw_spectrum_bar(PwvizVisualizer *visualizer, cairo_t *cr,
         &visualizer->peak_colors[i][color_level_index(peak_level)];
     double peak_alpha =
         color_alpha(visualizer->config.bar_alpha, peak_color->alpha);
-    double peak_h = CLAMP(floor(block_h * 0.5), 1.0, block_h);
-    double peak_y_in_slot = peak_block_y + floor((block_h - peak_h) * 0.5);
 
     cairo_set_source_rgba(cr, peak_color->red, peak_color->green,
                           peak_color->blue, peak_alpha);
-    cairo_rectangle(cr, bar_x, peak_y_in_slot, block_w, peak_h);
+    cairo_rectangle(cr, bar_x, peak_block_y, block_w, block_h);
     cairo_fill(cr);
   }
 
