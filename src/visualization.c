@@ -791,24 +791,32 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
     double x = i * bar_w;
     double bar_x = x + visualizer->config.x_spacing / 2.0;
     double lit_top = visual_bottom - h;
+    gboolean flash_lit =
+        visualizer->config.analyzer_mode == PWVIZ_ANALYZER_FLASH &&
+        visualizer->bars[i] > 0.75f;
 
     for (double y = visual_bottom - block_h; y >= visual_top;
          y -= block_h + block_gap) {
       double level = (visual_bottom - y) / visual_height;
       gboolean lit = y >= lit_top;
+      if (!lit && !flash_lit && INACTIVE_BAR_ALPHA <= 0)
+        continue;
+
       double red;
       double green;
       double blue;
       double source_alpha;
       style_color(visualizer, i, level, &red, &green, &blue, &source_alpha);
-      double alpha =
-          lit ? color_alpha(visualizer->config.bar_alpha, source_alpha)
-              : pct_alpha(INACTIVE_BAR_ALPHA);
+      double alpha = pct_alpha(INACTIVE_BAR_ALPHA);
 
-      if (visualizer->config.analyzer_mode == PWVIZ_ANALYZER_FLASH &&
-          visualizer->bars[i] > 0.75f)
+      if (flash_lit)
         alpha = color_alpha(visualizer->config.bar_alpha,
                             visualizer->config.high_color.alpha);
+      else if (lit)
+        alpha = color_alpha(visualizer->config.bar_alpha, source_alpha);
+
+      if (alpha <= 0.0)
+        continue;
 
       cairo_set_source_rgba(cr, red, green, blue, alpha);
       cairo_rectangle(cr, bar_x, y, block_w, block_h);

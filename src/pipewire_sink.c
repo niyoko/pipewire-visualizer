@@ -29,10 +29,7 @@ static void on_process(void *userdata) {
   uint32_t n_bytes = buf->datas[0].chunk->size;
   uint32_t n_floats = n_bytes / sizeof(float);
 
-  for (uint32_t i = 0; i + 1 < n_floats; i += PWVIZ_CHANNELS) {
-    float mono = (data[i] + data[i + 1]) * 0.5f;
-    pwviz_audio_buffer_push(sink->buffer, mono);
-  }
+  pwviz_audio_buffer_push_interleaved_stereo(sink->buffer, data, n_floats);
 
   pw_stream_queue_buffer(sink->stream, b);
 }
