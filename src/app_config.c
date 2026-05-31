@@ -137,7 +137,7 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->analyzer_mode = PWVIZ_ANALYZER_BARS;
   config->level_mode = PWVIZ_LEVEL_AVERAGE;
   config->bar_style = PWVIZ_BAR_STYLE_CLASSIC;
-  config->background_mode = PWVIZ_BACKGROUND_SOLID;
+  config->background_mode = PWVIZ_BACKGROUND_BLACK;
   config->peak_color_mode = PWVIZ_PEAK_COLOR_LEVEL_FADE;
   config->peak_motion = PWVIZ_PEAK_MOTION_FALL;
   config->window_anchor = PWVIZ_ANCHOR_BOTTOM_RIGHT;
@@ -185,7 +185,7 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   set_rgba(&config->low_color, 0.45, 0.0, 0.0, 1.0);
   set_rgba(&config->high_color, 1.0, 0.86, 0.0, 1.0);
   set_rgba(&config->peak_color, 1.0, 0.92, 0.20, 1.0);
-  set_rgba(&config->background_color, 0.015, 0.010, 0.008, 1.0);
+  set_rgba(&config->background_color, 0.0, 0.0, 0.0, 0.0);
   set_rgba(&config->now_playing_text_color, 1.0, 1.0, 1.0, 1.0);
   set_rgba(&config->now_playing_outline_color, 0.0, 0.0, 0.0, 1.0);
   set_rgba(&config->now_playing_shadow_color, 0.0, 0.0, 0.0, 1.0);
@@ -475,11 +475,6 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
     config->bar_style =
         CLAMP(g_key_file_get_integer(key_file, "Style", "bar_style", NULL),
               PWVIZ_BAR_STYLE_CLASSIC, PWVIZ_BAR_STYLE_RANDOM);
-  if (has_key(key_file, "Style", "background_mode"))
-    config->background_mode =
-        CLAMP(g_key_file_get_integer(key_file, "Style", "background_mode",
-                                     NULL),
-              PWVIZ_BACKGROUND_BLACK, PWVIZ_BACKGROUND_FLASH_GRID);
   if (has_key(key_file, "Style", "peak_color_mode"))
     config->peak_color_mode =
         CLAMP(g_key_file_get_integer(key_file, "Style", "peak_color_mode",
@@ -497,11 +492,6 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
     config->x_spacing =
         CLAMP(g_key_file_get_integer(key_file, "Style", "x_spacing", NULL), 0,
               10);
-  if (has_key(key_file, "Style", "background_alpha"))
-    config->background_alpha =
-        CLAMP(
-            g_key_file_get_double(key_file, "Style", "background_alpha", NULL),
-            0.0, 1.0);
   if (has_key(key_file, "Style", "bar_alpha"))
     config->bar_alpha =
         CLAMP(g_key_file_get_double(key_file, "Style", "bar_alpha", NULL), 0.0,
@@ -509,8 +499,9 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
   get_color(key_file, "Colour Factory", "low_color", &config->low_color);
   get_color(key_file, "Colour Factory", "high_color", &config->high_color);
   get_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
-  get_color(key_file, "Colour Factory", "background_color",
-            &config->background_color);
+  config->background_mode = PWVIZ_BACKGROUND_BLACK;
+  config->background_alpha = 0.0;
+  set_rgba(&config->background_color, 0.0, 0.0, 0.0, 0.0);
   get_color(key_file, "Now Playing", "text_color",
             &config->now_playing_text_color);
   get_color(key_file, "Now Playing", "outline_color",
@@ -615,21 +606,15 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
   g_key_file_set_integer(key_file, "Style", "block_height",
                          config->block_height);
   g_key_file_set_integer(key_file, "Style", "bar_style", config->bar_style);
-  g_key_file_set_integer(key_file, "Style", "background_mode",
-                         config->background_mode);
   g_key_file_set_integer(key_file, "Style", "peak_color_mode",
                          config->peak_color_mode);
   g_key_file_set_integer(key_file, "Style", "block_gap", config->block_gap);
   g_key_file_set_integer(key_file, "Style", "bar_width", config->bar_width);
   g_key_file_set_integer(key_file, "Style", "x_spacing", config->x_spacing);
-  g_key_file_set_double(key_file, "Style", "background_alpha",
-                        config->background_alpha);
   g_key_file_set_double(key_file, "Style", "bar_alpha", config->bar_alpha);
   set_color(key_file, "Colour Factory", "low_color", &config->low_color);
   set_color(key_file, "Colour Factory", "high_color", &config->high_color);
   set_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
-  set_color(key_file, "Colour Factory", "background_color",
-            &config->background_color);
   set_color(key_file, "Now Playing", "text_color",
             &config->now_playing_text_color);
   set_color(key_file, "Now Playing", "outline_color",
