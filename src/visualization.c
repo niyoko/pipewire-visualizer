@@ -481,18 +481,6 @@ static void append_now_playing_part(GString *line, const char *text) {
   g_string_append(line, text);
 }
 
-static const char *playback_status_icon(PwvizPlaybackStatus status) {
-  switch (status) {
-  case PWVIZ_PLAYBACK_PLAYING:
-    return "▶";
-  case PWVIZ_PLAYBACK_PAUSED:
-    return "⏸";
-  case PWVIZ_PLAYBACK_STOPPED:
-  default:
-    return "■";
-  }
-}
-
 static void format_track_time(gint64 time_us, char *buffer,
                               gsize buffer_size) {
   gint64 total_seconds = MAX(0, time_us / 1000000);
@@ -527,8 +515,6 @@ static void append_track_timer(GString *line,
 static char *now_playing_text(PwvizVisualizer *visualizer) {
   GString *line = g_string_new(NULL);
 
-  g_string_append_printf(line, "%s ", playback_status_icon(
-                                      visualizer->now_playing.status));
   append_track_timer(line, &visualizer->now_playing);
   if (visualizer->config.now_playing_show_app)
     append_now_playing_part(line, visualizer->now_playing.app);

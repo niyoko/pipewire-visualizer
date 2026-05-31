@@ -35,10 +35,10 @@ content, stays above normal windows, and is fully click-through.
 - Native GTK settings window opened with `Ctrl+Shift+Alt+F12`, with organized
   Analyzer, Layout, Style, Colour Factory, and Now Playing & Lyrics pages.
 - MPRIS Now Playing metadata for player app, track title, artist, and album,
-  with playback status icon, elapsed/total timer when available, configurable
-  displayed fields, compact metadata-only layout when lyrics are unavailable,
-  strip height, background alpha, font, colour, and outline. The displayed timer
-  freezes while playback is paused.
+  with elapsed/total timer when available, configurable displayed fields,
+  compact metadata-only layout when lyrics are unavailable, strip height,
+  background alpha, font, colour, and outline. The displayed timer freezes while
+  playback is paused.
 - LRCLIB lyric fetching in a background worker with on-disk JSON cache under
   `~/.cache/pipewire-visualizer/lyrics/`.
 - Synced lyric display with optional two-line karaoke-style output, retained
@@ -174,8 +174,8 @@ reserve the configured block gap above the lit bar stack.
 
 The Now Playing section uses MPRIS metadata from the session bus when a player
 provides it. It can show the player app, track title, artist, and album in a
-bottom strip, prefixed by playback status and an elapsed/total timer when the
-player provides duration. The strip has configurable visibility, height,
+bottom strip, prefixed by an elapsed/total timer when the player provides
+duration. The strip has configurable visibility, height,
 metadata font family, style, size, metadata colour, outline colour, outline
 width, and background alpha. If lyrics are disabled, unavailable, or fail to
 load, the strip compacts to the metadata row instead of reserving an empty lyric
