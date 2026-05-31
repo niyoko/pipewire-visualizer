@@ -159,6 +159,7 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->display_threshold = 0.08f;
   config->fft_envelope = 0.2f;
   config->fft_scale = 2.0f;
+  config->silence_fade_seconds = 0.6;
   config->background_alpha = 0.0;
   config->bar_alpha = 0.35;
   config->now_playing_alpha = 0.72;
@@ -264,6 +265,11 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
         CLAMP(g_key_file_get_double(key_file, "Analyzer", "display_threshold",
                                     NULL),
               0.0, 0.5);
+  if (has_key(key_file, "Analyzer", "silence_fade_seconds"))
+    config->silence_fade_seconds = CLAMP(
+        g_key_file_get_double(key_file, "Analyzer", "silence_fade_seconds",
+                              NULL),
+        0.0, 5.0);
   if (has_key(key_file, "Analyzer", "fft_equalize"))
     config->fft_equalize =
         g_key_file_get_boolean(key_file, "Analyzer", "fft_equalize", NULL);
@@ -540,6 +546,8 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
                         config->peak_fall_per_frame);
   g_key_file_set_double(key_file, "Analyzer", "display_threshold",
                         config->display_threshold);
+  g_key_file_set_double(key_file, "Analyzer", "silence_fade_seconds",
+                        config->silence_fade_seconds);
   g_key_file_set_boolean(key_file, "Analyzer", "fft_equalize",
                          config->fft_equalize);
   g_key_file_set_double(key_file, "Analyzer", "fft_envelope",

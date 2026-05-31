@@ -25,7 +25,7 @@ content, stays above normal windows, and is fully click-through.
   configurable colours.
 - Transparent-only overlay rendering. When audio is silent or below the display
   threshold, FFT analysis is skipped where possible, bars and peak indicators
-  are cleared immediately, and the window becomes fully transparent.
+  decay normally first, and the window then fades to fully transparent.
 - Retained spectrum rendering with dirty-column redraws, precomputed block
   positions, cached colours, cached Now Playing layout height, and skipped GTK
   redraws when the visible spectrum state has not changed.
@@ -161,17 +161,16 @@ The overlay window background is always transparent; spectrum bars and peaks
 render with alpha over the desktop. Use `Ctrl+Shift+Alt+F12` to open the
 settings window.
 Settings include analyzer mode, bar count, WACUP-style FFT equalization,
-envelope and scale, level mode, display threshold, target FPS, falloff, window
-anchor, margins, size, bar width, spacing, block size, peak behavior, alpha,
-bar opacity, colours, Now Playing metadata, and lyrics.
+envelope and scale, level mode, display threshold, target FPS, falloff, silence
+fade duration, window anchor, margins, size, bar width, spacing, block size,
+peak behavior, alpha, bar opacity, colours, Now Playing metadata, and lyrics.
 
 The Style page exposes the Winamp-era categories shown by the
 original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,
 `Solid Lines`, `Winamp Fire`, `Random`), Peak Colour (`Fade`, `Level`,
 `Level & Fade`), and Motion (`Normal`, `Fall`, `Rise`, `Fall & Rise`,
-`Rise Fall`, `Sparks`). Peak indicators are drawn as thin caps aligned to the
-same block grid as the bars, so they stay visually separate when they meet the
-lit bar stack.
+`Rise Fall`, `Sparks`). Peak indicators use the same thickness as bar rows and
+reserve the configured block gap above the lit bar stack.
 
 The Now Playing section uses MPRIS metadata from the session bus when a player
 provides it. It can show the player app, track title, artist, and album in a
@@ -190,11 +189,12 @@ Use `Ctrl+Shift+Left` and `Ctrl+Shift+Right` while a song is playing to adjust
 that song's lyric timing offset in 250 ms steps. The offset is stored in that
 song's cached lyric JSON as `pwvizOffsetMs`.
 
-When the latest audio buffer is silent, the visualizer skips FFT analysis,
-clears bar and peak state, skips Now Playing drawing, and clears the GTK drawing
-target. If FFT does run but all calculated levels are below the configured
-display threshold, that frame is also treated as silent so no peak caps remain
-visible.
+When the latest audio buffer is silent, the visualizer skips FFT analysis and
+feeds zero levels through the normal bar and peak decay path. Once all bars and
+peak indicators have dropped out, the whole overlay fades to transparent over
+the configured silence fade duration. If FFT does run but all calculated levels
+are below the configured display threshold, that frame follows the same silence
+path. When audio returns, the overlay appears immediately without a fade-in.
 
 Settings are saved to:
 

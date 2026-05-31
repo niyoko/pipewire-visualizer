@@ -83,6 +83,7 @@ typedef struct {
   float display_threshold;
   float fft_envelope;
   float fft_scale;
+  double silence_fade_seconds;
   double background_alpha;
   double bar_alpha;
   double now_playing_alpha;

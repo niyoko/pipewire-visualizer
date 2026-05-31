@@ -72,6 +72,7 @@ typedef struct {
   char lyrics_offset_message[64];
   gboolean color_cache_valid;
   gboolean audio_silent;
+  double silence_fade_alpha;
   gboolean destroying;
   int width;
   int height;
@@ -820,6 +821,36 @@ static gboolean clear_audio_levels(PwvizVisualizer *visualizer) {
   return changed;
 }
 
+static gboolean audio_levels_visible(PwvizVisualizer *visualizer) {
+  for (int i = 0; i < PWVIZ_BAR_COUNT; i++) {
+    if (visualizer->bars[i] > 0.0001f ||
+        visualizer->peak_caps[i] > 0.0001f)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean update_silence_fade(PwvizVisualizer *visualizer,
+                                    gboolean visual_active) {
+  double old_alpha = visualizer->silence_fade_alpha;
+
+  if (visual_active) {
+    visualizer->silence_fade_alpha = 1.0;
+  } else if (visualizer->config.silence_fade_seconds <= 0.0) {
+    visualizer->silence_fade_alpha = 0.0;
+  } else {
+    double fps = CLAMP(visualizer->config.target_fps, 15, 120);
+    double step = 1.0 / (visualizer->config.silence_fade_seconds * fps);
+
+    visualizer->silence_fade_alpha =
+        MAX(0.0, visualizer->silence_fade_alpha - step);
+  }
+
+  visualizer->audio_silent = visualizer->silence_fade_alpha <= 0.0;
+  return fabs(old_alpha - visualizer->silence_fade_alpha) > 0.0001;
+}
+
 static gboolean levels_have_visible_signal(PwvizVisualizer *visualizer) {
   int bar_count = effective_bar_count(visualizer, visualizer->width);
 
@@ -992,6 +1023,8 @@ static void draw_spectrum_bar(PwvizVisualizer *visualizer, cairo_t *cr,
                            : visualizer->bars[i];
     double h = bar_value * spectrum_height;
     double lit_top = spectrum_height - h;
+    double top_lit_block_y = spectrum_height;
+    gboolean has_lit_block = FALSE;
     gboolean flash_lit =
         visualizer->config.analyzer_mode == PWVIZ_ANALYZER_FLASH &&
         visualizer->bars[i] > 0.75f;
@@ -1001,6 +1034,10 @@ static void draw_spectrum_bar(PwvizVisualizer *visualizer, cairo_t *cr,
       BlockRow *row = &visualizer->block_rows[row_index];
       gboolean lit = row->y >= lit_top;
       CachedColor *color = &visualizer->style_colors[i][row->color_index];
+      if (lit) {
+        has_lit_block = TRUE;
+        top_lit_block_y = row->y;
+      }
       if (!lit && !flash_lit && INACTIVE_BAR_ALPHA <= 0)
         continue;
 
@@ -1035,8 +1072,9 @@ static void draw_spectrum_bar(PwvizVisualizer *visualizer, cairo_t *cr,
     double peak_block_y =
         CLAMP(snapped_peak_y, PWVIZ_SPECTRUM_TOP_PADDING,
               spectrum_height - block_h);
-    if (peak_block_y >= lit_top)
-      peak_block_y -= block_h + block_gap;
+    if (has_lit_block &&
+        peak_block_y + block_h + block_gap > top_lit_block_y)
+      peak_block_y = top_lit_block_y - block_h - block_gap;
     if (peak_block_y < PWVIZ_SPECTRUM_TOP_PADDING)
       peak_block_y = PWVIZ_SPECTRUM_TOP_PADDING;
 
@@ -1143,8 +1181,16 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int width, int height,
 
   if (visualizer->spectrum_surface_dirty)
     update_spectrum_surface(visualizer);
-  draw_spectrum(visualizer, cr);
-  draw_now_playing(visualizer, cr, width, height);
+  if (visualizer->silence_fade_alpha < 1.0) {
+    cairo_push_group(cr);
+    draw_spectrum(visualizer, cr);
+    draw_now_playing(visualizer, cr, width, height);
+    cairo_pop_group_to_source(cr);
+    cairo_paint_with_alpha(cr, visualizer->silence_fade_alpha);
+  } else {
+    draw_spectrum(visualizer, cr);
+    draw_now_playing(visualizer, cr, width, height);
+  }
 }
 
 static gboolean animation_frame_cb(gpointer data) {
@@ -1158,16 +1204,25 @@ static gboolean animation_frame_cb(gpointer data) {
 
   gboolean was_silent = visualizer->audio_silent;
   gboolean has_signal = update_spectrum(visualizer);
-  visualizer->audio_silent = !has_signal;
 
   if (!has_signal) {
-    gboolean levels_changed = clear_audio_levels(visualizer);
+    gboolean bars_changed = update_bars(visualizer);
+    gboolean peaks_changed = update_peak_caps(visualizer, effective_bar_count(
+                                                              visualizer,
+                                                              visualizer->width));
+    gboolean fade_changed =
+        update_silence_fade(visualizer, audio_levels_visible(visualizer));
     gboolean surface_changed = update_spectrum_surface(visualizer);
-    if (levels_changed || surface_changed || !was_silent)
+    if (visualizer->audio_silent)
+      clear_audio_levels(visualizer);
+    if (bars_changed || peaks_changed || fade_changed || surface_changed ||
+        !was_silent)
       queue_visualizer_draw(visualizer);
     return G_SOURCE_CONTINUE;
   }
 
+  visualizer->silence_fade_alpha = 1.0;
+  visualizer->audio_silent = FALSE;
   gboolean bars_changed = update_bars(visualizer);
   gboolean peaks_changed = update_peak_caps(visualizer, effective_bar_count(
                                                             visualizer,
@@ -1573,6 +1628,12 @@ static void display_threshold_changed_cb(GtkRange *range, gpointer data) {
   visualizer->config.display_threshold = gtk_range_get_value(range);
   invalidate_spectrum_surface(visualizer);
   queue_visualizer_draw(visualizer);
+}
+
+static void silence_fade_changed_cb(GtkSpinButton *spin, gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.silence_fade_seconds = gtk_spin_button_get_value(spin);
 }
 
 static void bar_alpha_changed_cb(GtkRange *range, gpointer data) {
@@ -2155,6 +2216,7 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   GtkWidget *level_average = gtk_check_button_new_with_label("Average");
   GtkWidget *target_fps = gtk_spin_button_new_with_range(15, 120, 1);
   GtkWidget *falloff = gtk_spin_button_new_with_range(0, 75, 1);
+  GtkWidget *silence_fade = gtk_spin_button_new_with_range(0.0, 5.0, 0.1);
   GtkWidget *display_threshold =
       gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 0.5, 0.01);
   GtkWidget *fft_equalize = gtk_check_button_new_with_label("Equalize");
@@ -2165,6 +2227,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
 
   prepare_spin(target_fps);
   prepare_spin(falloff);
+  prepare_spin(silence_fade);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(silence_fade), 1);
   prepare_scale(display_threshold, 2);
   prepare_scale(fft_envelope, 2);
   prepare_scale(fft_scale, 1);
@@ -2202,6 +2266,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                             visualizer->config.target_fps);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(falloff),
                             visualizer->config.falloff_rate);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(silence_fade),
+                            visualizer->config.silence_fade_seconds);
   gtk_range_set_value(GTK_RANGE(display_threshold),
                       visualizer->config.display_threshold);
   gtk_check_button_set_active(GTK_CHECK_BUTTON(fft_equalize),
@@ -2226,6 +2292,8 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
                    G_CALLBACK(falloff_rate_changed_cb), visualizer);
   g_signal_connect(display_threshold, "value-changed",
                    G_CALLBACK(display_threshold_changed_cb), visualizer);
+  g_signal_connect(silence_fade, "value-changed",
+                   G_CALLBACK(silence_fade_changed_cb), visualizer);
   g_signal_connect(fft_equalize, "toggled",
                    G_CALLBACK(fft_equalize_toggled_cb), visualizer);
   g_signal_connect(fft_envelope, "value-changed",
@@ -2246,6 +2314,7 @@ static GtkWidget *build_analyzer_tab(PwvizVisualizer *visualizer) {
   gtk_box_append(GTK_BOX(box), control_row("Display threshold",
                                            display_threshold));
   gtk_box_append(GTK_BOX(box), control_row("Falloff", falloff));
+  gtk_box_append(GTK_BOX(box), control_row("Silence fade", silence_fade));
   gtk_box_append(GTK_BOX(box), section_label("FFT"));
   gtk_box_append(GTK_BOX(box), fft_equalize);
   gtk_box_append(GTK_BOX(box), control_row("Envelope", fft_envelope));
@@ -2984,6 +3053,7 @@ static void visualizer_init(PwvizVisualizer *visualizer,
   visualizer->width = visualizer->config.window_width;
   visualizer->height = visualizer->config.window_height;
   visualizer->audio_silent = TRUE;
+  visualizer->silence_fade_alpha = 0.0;
   if (visualizer->config.now_playing_enabled) {
     refresh_now_playing(visualizer);
     maybe_start_lyrics_fetch(visualizer);
