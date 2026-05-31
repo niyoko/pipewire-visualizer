@@ -11,6 +11,7 @@
 typedef struct {
   gboolean found;
   gboolean playing;
+  PwvizPlaybackStatus status;
   PwvizNowPlaying now_playing;
 } PlayerCandidate;
 
@@ -158,6 +159,7 @@ static gboolean read_player(GDBusConnection *connection, const char *bus_name,
   pwviz_now_playing_clear(&candidate->now_playing);
   candidate->found = FALSE;
   candidate->playing = FALSE;
+  candidate->status = PWVIZ_PLAYBACK_STOPPED;
 
   get_string_property(connection, bus_name, MPRIS_ROOT_IFACE, "Identity",
                       candidate->now_playing.app,
@@ -169,8 +171,16 @@ static gboolean read_player(GDBusConnection *connection, const char *bus_name,
   get_string_property(connection, bus_name, MPRIS_PLAYER_IFACE,
                       "PlaybackStatus", playback_status,
                       sizeof(playback_status));
-  candidate->playing = g_strcmp0(playback_status, "Playing") == 0;
+  if (g_strcmp0(playback_status, "Playing") == 0)
+    candidate->status = PWVIZ_PLAYBACK_PLAYING;
+  else if (g_strcmp0(playback_status, "Paused") == 0)
+    candidate->status = PWVIZ_PLAYBACK_PAUSED;
+  else
+    candidate->status = PWVIZ_PLAYBACK_STOPPED;
+
+  candidate->playing = candidate->status == PWVIZ_PLAYBACK_PLAYING;
   candidate->now_playing.playing = candidate->playing;
+  candidate->now_playing.status = candidate->status;
   get_int64_property(connection, bus_name, MPRIS_PLAYER_IFACE, "Position",
                      &candidate->now_playing.position_us);
 

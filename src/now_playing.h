@@ -2,9 +2,16 @@
 
 #include <glib.h>
 
+typedef enum {
+  PWVIZ_PLAYBACK_STOPPED = 0,
+  PWVIZ_PLAYBACK_PAUSED,
+  PWVIZ_PLAYBACK_PLAYING,
+} PwvizPlaybackStatus;
+
 typedef struct {
   gboolean available;
   gboolean playing;
+  PwvizPlaybackStatus status;
   gint64 duration_us;
   gint64 position_us;
   char app[128];

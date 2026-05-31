@@ -335,6 +335,12 @@ static int font_pixel_size(const char *font_desc, int fallback) {
   return CLAMP(pixels, 8, 64);
 }
 
+static gboolean lyrics_display_available(PwvizVisualizer *visualizer) {
+  return visualizer->config.lyrics_enabled && visualizer->lyrics &&
+         visualizer->lyrics->available && visualizer->lyrics->synced &&
+         visualizer->lyrics->lines && visualizer->lyrics->lines->len > 0;
+}
+
 static int now_playing_height(PwvizVisualizer *visualizer) {
   if (!visualizer->config.now_playing_enabled ||
       !visualizer->now_playing.available)
@@ -346,17 +352,19 @@ static int now_playing_height(PwvizVisualizer *visualizer) {
   int bottom_lyric_size =
       font_pixel_size(visualizer->config.lyrics_bottom_font, 12);
   int metadata_h = metadata_size + 16;
-  int lyric_h =
-      visualizer->config.lyrics_enabled
-          ? top_lyric_size +
-                (visualizer->config.lyrics_two_lines ? bottom_lyric_size + 10
-                                                     : 0) +
-                24
-          : 0;
+  gboolean show_lyrics = lyrics_display_available(visualizer);
+  int lyric_h = show_lyrics ? top_lyric_size +
+                                  (visualizer->config.lyrics_two_lines
+                                       ? bottom_lyric_size + 10
+                                       : 0) +
+                                  24
+                            : 0;
   int minimum = metadata_h + lyric_h;
+  int preferred = show_lyrics ? MAX(visualizer->config.now_playing_height,
+                                    minimum)
+                              : metadata_h;
 
-  return CLAMP(MAX(visualizer->config.now_playing_height, minimum), 0,
-               MAX(0, visualizer->height - 24));
+  return CLAMP(preferred, 0, MAX(0, visualizer->height - 24));
 }
 
 static void update_peak_cap(PwvizVisualizer *visualizer, int index) {
@@ -500,14 +508,60 @@ static void append_now_playing_part(GString *line, const char *text) {
   if (!text || text[0] == '\0')
     return;
 
-  if (line->len > 0)
+  if (line->len > 0 && line->str[line->len - 1] != ' ')
     g_string_append(line, "  |  ");
   g_string_append(line, text);
+}
+
+static const char *playback_status_icon(PwvizPlaybackStatus status) {
+  switch (status) {
+  case PWVIZ_PLAYBACK_PLAYING:
+    return "▶";
+  case PWVIZ_PLAYBACK_PAUSED:
+    return "⏸";
+  case PWVIZ_PLAYBACK_STOPPED:
+  default:
+    return "■";
+  }
+}
+
+static void format_track_time(gint64 time_us, char *buffer,
+                              gsize buffer_size) {
+  gint64 total_seconds = MAX(0, time_us / 1000000);
+  gint64 seconds = total_seconds % 60;
+  gint64 minutes = (total_seconds / 60) % 60;
+  gint64 hours = total_seconds / 3600;
+
+  if (hours > 0)
+    g_snprintf(buffer, buffer_size, "%" G_GINT64_FORMAT ":%02" G_GINT64_FORMAT
+                                    ":%02" G_GINT64_FORMAT,
+               hours, minutes, seconds);
+  else
+    g_snprintf(buffer, buffer_size, "%" G_GINT64_FORMAT ":%02" G_GINT64_FORMAT,
+               minutes, seconds);
+}
+
+static void append_track_timer(GString *line,
+                               const PwvizNowPlaying *now_playing) {
+  if (now_playing->duration_us <= 0)
+    return;
+
+  char position[32];
+  char duration[32];
+  char timer[72];
+
+  format_track_time(now_playing->position_us, position, sizeof(position));
+  format_track_time(now_playing->duration_us, duration, sizeof(duration));
+  g_snprintf(timer, sizeof(timer), "%s/%s", position, duration);
+  append_now_playing_part(line, timer);
 }
 
 static char *now_playing_text(PwvizVisualizer *visualizer) {
   GString *line = g_string_new(NULL);
 
+  g_string_append_printf(line, "%s ", playback_status_icon(
+                                      visualizer->now_playing.status));
+  append_track_timer(line, &visualizer->now_playing);
   if (visualizer->config.now_playing_show_app)
     append_now_playing_part(line, visualizer->now_playing.app);
   if (visualizer->config.now_playing_show_title)
@@ -654,7 +708,7 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
 
   const char *current_lyric = NULL;
   const char *next_lyric = NULL;
-  if (visualizer->config.lyrics_enabled)
+  if (lyrics_display_available(visualizer))
     pwviz_lyrics_current_lines(visualizer->lyrics,
                                visualizer->now_playing.position_us,
                                &current_lyric, &next_lyric);
@@ -878,6 +932,9 @@ static void draw_spectrum(PwvizVisualizer *visualizer, cairo_t *cr, int width,
 
     double peak_block_y =
         CLAMP(snapped_peak_y, visual_top, visual_bottom - block_h);
+    if (peak_block_y >= lit_top)
+      continue;
+
     double peak_level = visualizer->peak_caps[i];
     CachedColor *peak_color =
         &visualizer->peak_colors[i][color_level_index(peak_level)];
