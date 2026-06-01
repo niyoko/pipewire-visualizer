@@ -83,14 +83,11 @@ typedef enum {
   COLOR_HIGH,
   COLOR_PEAK,
   COLOR_NOW_PLAYING_TEXT,
-  COLOR_NOW_PLAYING_OUTLINE,
-  COLOR_NOW_PLAYING_SHADOW,
+  COLOR_NOW_PLAYING_GLOW,
   COLOR_LYRICS_TOP_TEXT,
-  COLOR_LYRICS_TOP_OUTLINE,
-  COLOR_LYRICS_TOP_SHADOW,
+  COLOR_LYRICS_TOP_GLOW,
   COLOR_LYRICS_BOTTOM_TEXT,
-  COLOR_LYRICS_BOTTOM_OUTLINE,
-  COLOR_LYRICS_BOTTOM_SHADOW,
+  COLOR_LYRICS_BOTTOM_GLOW,
 } ColorTarget;
 
 enum {
@@ -541,47 +538,32 @@ static char *now_playing_cache_key(PwvizVisualizer *visualizer, int width,
   const PwvizAppConfig *config = &visualizer->config;
   GString *key = g_string_new(NULL);
 
-  g_string_append_printf(key, "%dx%dx%d|%s|%s|%s|%.3f", width, height,
+  g_string_append_printf(key, "%dx%dx%d|%s|%s|%s", width, height,
                          section_h, text ? text : "",
                          current_lyric ? current_lyric : "",
-                         next_lyric ? next_lyric : "",
-                         config->now_playing_alpha);
+                         next_lyric ? next_lyric : "");
 
-  g_string_append_printf(key, "|np:%s|%.3f|", config->now_playing_font,
-                         config->now_playing_outline_width);
+  g_string_append_printf(key, "|np:%s|%.3f,%.3f|", config->now_playing_font,
+                         config->now_playing_glow_size,
+                         config->now_playing_glow_feather);
   append_rgba_key(key, &config->now_playing_text_color);
   g_string_append_c(key, '|');
-  append_rgba_key(key, &config->now_playing_outline_color);
-  g_string_append_c(key, '|');
-  append_rgba_key(key, &config->now_playing_shadow_color);
-  g_string_append_printf(key, "|%.3f,%.3f,%.3f",
-                         config->now_playing_shadow_x,
-                         config->now_playing_shadow_y,
-                         config->now_playing_shadow_opacity);
+  append_rgba_key(key, &config->now_playing_glow_color);
 
-  g_string_append_printf(key, "|lyrics:%d|top:%s|%.3f|",
+  g_string_append_printf(key, "|lyrics:%d|top:%s|%.3f,%.3f|",
                          config->lyrics_two_lines, config->lyrics_top_font,
-                         config->lyrics_top_outline_width);
+                         config->lyrics_top_glow_size,
+                         config->lyrics_top_glow_feather);
   append_rgba_key(key, &config->lyrics_top_text_color);
   g_string_append_c(key, '|');
-  append_rgba_key(key, &config->lyrics_top_outline_color);
-  g_string_append_c(key, '|');
-  append_rgba_key(key, &config->lyrics_top_shadow_color);
-  g_string_append_printf(key, "|%.3f,%.3f,%.3f|bottom:%s|%.3f|",
-                         config->lyrics_top_shadow_x,
-                         config->lyrics_top_shadow_y,
-                         config->lyrics_top_shadow_opacity,
+  append_rgba_key(key, &config->lyrics_top_glow_color);
+  g_string_append_printf(key, "|bottom:%s|%.3f,%.3f|",
                          config->lyrics_bottom_font,
-                         config->lyrics_bottom_outline_width);
+                         config->lyrics_bottom_glow_size,
+                         config->lyrics_bottom_glow_feather);
   append_rgba_key(key, &config->lyrics_bottom_text_color);
   g_string_append_c(key, '|');
-  append_rgba_key(key, &config->lyrics_bottom_outline_color);
-  g_string_append_c(key, '|');
-  append_rgba_key(key, &config->lyrics_bottom_shadow_color);
-  g_string_append_printf(key, "|%.3f,%.3f,%.3f",
-                         config->lyrics_bottom_shadow_x,
-                         config->lyrics_bottom_shadow_y,
-                         config->lyrics_bottom_shadow_opacity);
+  append_rgba_key(key, &config->lyrics_bottom_glow_color);
 
   return g_string_free(key, FALSE);
 }
@@ -590,11 +572,8 @@ static void draw_ellipsized_text(cairo_t *cr, const char *text,
                                  const char *font_desc, double x, double y,
                                  int width,
                                  const GdkRGBA *text_color,
-                                 const GdkRGBA *outline_color,
-                                 double outline_width,
-                                 const GdkRGBA *shadow_color,
-                                 double shadow_x, double shadow_y,
-                                 double shadow_opacity, double alpha) {
+                                 const GdkRGBA *glow_color, double glow_size,
+                                 double glow_feather, double alpha) {
   if (!text || text[0] == '\0')
     return;
 
@@ -613,25 +592,30 @@ static void draw_ellipsized_text(cairo_t *cr, const char *text,
   }
   pango_layout_set_text(layout, display_text, -1);
 
-  if (shadow_color && shadow_opacity > 0.0) {
-    cairo_move_to(cr, x + shadow_x, y + shadow_y);
-    pango_cairo_layout_path(cr, layout);
-    cairo_set_source_rgba(cr, shadow_color->red, shadow_color->green,
-                          shadow_color->blue,
-                          color_alpha(alpha, shadow_color->alpha) *
-                              CLAMP(shadow_opacity, 0.0, 1.0));
-    cairo_fill(cr);
-  }
-
   cairo_move_to(cr, x, y);
   pango_cairo_layout_path(cr, layout);
-  if (outline_width > 0.0) {
-    cairo_set_source_rgba(cr, outline_color->red, outline_color->green,
-                          outline_color->blue,
-                          color_alpha(alpha, outline_color->alpha));
-    cairo_set_line_width(cr, outline_width);
+  if (glow_size > 0.0 || glow_feather > 0.0) {
+    double base_alpha = color_alpha(alpha, glow_color->alpha);
+    double feather = MAX(0.0, glow_feather);
+
+    cairo_set_source_rgba(cr, glow_color->red, glow_color->green,
+                          glow_color->blue, base_alpha * 0.22);
     cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-    cairo_stroke_preserve(cr);
+    for (int i = 3; i > 0; i--) {
+      double width = glow_size + feather * ((double)i / 3.0);
+
+      if (width <= 0.0)
+        continue;
+      cairo_set_line_width(cr, width);
+      cairo_stroke_preserve(cr);
+    }
+
+    if (glow_size > 0.0) {
+      cairo_set_source_rgba(cr, glow_color->red, glow_color->green,
+                            glow_color->blue, base_alpha);
+      cairo_set_line_width(cr, glow_size);
+      cairo_stroke_preserve(cr);
+    }
   }
   cairo_set_source_rgba(cr, text_color->red, text_color->green,
                         text_color->blue, color_alpha(alpha, text_color->alpha));
@@ -677,11 +661,6 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
     visualizer->now_playing_surface = cairo_image_surface_create(
         CAIRO_FORMAT_ARGB32, MAX(1, width), MAX(1, section_h));
     cairo_t *surface_cr = cairo_create(visualizer->now_playing_surface);
-    double alpha = CLAMP(visualizer->config.now_playing_alpha, 0.0, 1.0);
-
-    cairo_set_source_rgba(surface_cr, 0.0, 0.0, 0.0, alpha);
-    cairo_rectangle(surface_cr, 0.0, 0.0, width, section_h);
-    cairo_fill(surface_cr);
 
     int content_w = MAX(1, width - 16);
     int metadata_size =
@@ -699,43 +678,31 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
                            visualizer->config.now_playing_font, 8.0, title_y,
                            content_w,
                            &visualizer->config.now_playing_text_color,
-                           &visualizer->config.now_playing_outline_color,
-                           visualizer->config.now_playing_outline_width,
-                           &visualizer->config.now_playing_shadow_color,
-                           visualizer->config.now_playing_shadow_x,
-                           visualizer->config.now_playing_shadow_y,
-                           visualizer->config.now_playing_shadow_opacity, 0.78);
+                           &visualizer->config.now_playing_glow_color,
+                           visualizer->config.now_playing_glow_size,
+                           visualizer->config.now_playing_glow_feather, 0.78);
       draw_ellipsized_text(
           surface_cr, current_lyric, visualizer->config.lyrics_top_font, 8.0,
           current_y, content_w, &visualizer->config.lyrics_top_text_color,
-          &visualizer->config.lyrics_top_outline_color,
-          visualizer->config.lyrics_top_outline_width,
-          &visualizer->config.lyrics_top_shadow_color,
-          visualizer->config.lyrics_top_shadow_x,
-          visualizer->config.lyrics_top_shadow_y,
-          visualizer->config.lyrics_top_shadow_opacity, 0.98);
+          &visualizer->config.lyrics_top_glow_color,
+          visualizer->config.lyrics_top_glow_size,
+          visualizer->config.lyrics_top_glow_feather, 0.98);
       if (visualizer->config.lyrics_two_lines && next_lyric &&
           next_y + bottom_lyric_size <= section_h - 4.0)
         draw_ellipsized_text(
             surface_cr, next_lyric, visualizer->config.lyrics_bottom_font, 8.0,
             next_y, content_w, &visualizer->config.lyrics_bottom_text_color,
-            &visualizer->config.lyrics_bottom_outline_color,
-            visualizer->config.lyrics_bottom_outline_width,
-            &visualizer->config.lyrics_bottom_shadow_color,
-            visualizer->config.lyrics_bottom_shadow_x,
-            visualizer->config.lyrics_bottom_shadow_y,
-            visualizer->config.lyrics_bottom_shadow_opacity, 0.62);
+            &visualizer->config.lyrics_bottom_glow_color,
+            visualizer->config.lyrics_bottom_glow_size,
+            visualizer->config.lyrics_bottom_glow_feather, 0.62);
     } else {
       draw_ellipsized_text(
           surface_cr, text, visualizer->config.now_playing_font, 8.0,
           MAX(0, section_h - metadata_size) / 2.0, content_w,
           &visualizer->config.now_playing_text_color,
-          &visualizer->config.now_playing_outline_color,
-          visualizer->config.now_playing_outline_width,
-          &visualizer->config.now_playing_shadow_color,
-          visualizer->config.now_playing_shadow_x,
-          visualizer->config.now_playing_shadow_y,
-          visualizer->config.now_playing_shadow_opacity, 0.96);
+          &visualizer->config.now_playing_glow_color,
+          visualizer->config.now_playing_glow_size,
+          visualizer->config.now_playing_glow_feather, 0.96);
     }
 
     cairo_destroy(surface_cr);
@@ -1669,110 +1636,55 @@ static void now_playing_height_changed_cb(GtkSpinButton *spin, gpointer data) {
   queue_visualizer_draw(visualizer);
 }
 
-static void now_playing_outline_width_changed_cb(GtkSpinButton *spin,
-                                                 gpointer data) {
+static void now_playing_glow_size_changed_cb(GtkSpinButton *spin,
+                                             gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  visualizer->config.now_playing_outline_width =
+  visualizer->config.now_playing_glow_size = gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_top_glow_size_changed_cb(GtkSpinButton *spin,
+                                            gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_top_glow_size = gtk_spin_button_get_value(spin);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_bottom_glow_size_changed_cb(GtkSpinButton *spin,
+                                               gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  visualizer->config.lyrics_bottom_glow_size =
       gtk_spin_button_get_value(spin);
   queue_visualizer_draw(visualizer);
 }
 
-static void lyrics_top_outline_width_changed_cb(GtkSpinButton *spin,
+static void now_playing_glow_feather_changed_cb(GtkSpinButton *spin,
                                                 gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  visualizer->config.lyrics_top_outline_width =
+  visualizer->config.now_playing_glow_feather =
       gtk_spin_button_get_value(spin);
   queue_visualizer_draw(visualizer);
 }
 
-static void lyrics_bottom_outline_width_changed_cb(GtkSpinButton *spin,
-                                                   gpointer data) {
+static void lyrics_top_glow_feather_changed_cb(GtkSpinButton *spin,
+                                               gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  visualizer->config.lyrics_bottom_outline_width =
+  visualizer->config.lyrics_top_glow_feather =
       gtk_spin_button_get_value(spin);
   queue_visualizer_draw(visualizer);
 }
 
-static void now_playing_shadow_x_changed_cb(GtkSpinButton *spin,
-                                            gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.now_playing_shadow_x = gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void now_playing_shadow_y_changed_cb(GtkSpinButton *spin,
-                                            gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.now_playing_shadow_y = gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void now_playing_shadow_opacity_changed_cb(GtkSpinButton *spin,
+static void lyrics_bottom_glow_feather_changed_cb(GtkSpinButton *spin,
                                                   gpointer data) {
   PwvizVisualizer *visualizer = data;
 
-  visualizer->config.now_playing_shadow_opacity =
+  visualizer->config.lyrics_bottom_glow_feather =
       gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void lyrics_top_shadow_x_changed_cb(GtkSpinButton *spin, gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.lyrics_top_shadow_x = gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void lyrics_top_shadow_y_changed_cb(GtkSpinButton *spin, gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.lyrics_top_shadow_y = gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void lyrics_top_shadow_opacity_changed_cb(GtkSpinButton *spin,
-                                                 gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.lyrics_top_shadow_opacity =
-      gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void lyrics_bottom_shadow_x_changed_cb(GtkSpinButton *spin,
-                                              gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.lyrics_bottom_shadow_x = gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void lyrics_bottom_shadow_y_changed_cb(GtkSpinButton *spin,
-                                              gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.lyrics_bottom_shadow_y = gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void lyrics_bottom_shadow_opacity_changed_cb(GtkSpinButton *spin,
-                                                    gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.lyrics_bottom_shadow_opacity =
-      gtk_spin_button_get_value(spin);
-  queue_visualizer_draw(visualizer);
-}
-
-static void now_playing_alpha_changed_cb(GtkRange *range, gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  visualizer->config.now_playing_alpha = gtk_range_get_value(range);
   queue_visualizer_draw(visualizer);
 }
 
@@ -1861,29 +1773,20 @@ static void color_changed_cb(GtkColorButton *button, gpointer data) {
   case COLOR_NOW_PLAYING_TEXT:
     binding->visualizer->config.now_playing_text_color = color;
     break;
-  case COLOR_NOW_PLAYING_OUTLINE:
-    binding->visualizer->config.now_playing_outline_color = color;
-    break;
-  case COLOR_NOW_PLAYING_SHADOW:
-    binding->visualizer->config.now_playing_shadow_color = color;
+  case COLOR_NOW_PLAYING_GLOW:
+    binding->visualizer->config.now_playing_glow_color = color;
     break;
   case COLOR_LYRICS_TOP_TEXT:
     binding->visualizer->config.lyrics_top_text_color = color;
     break;
-  case COLOR_LYRICS_TOP_OUTLINE:
-    binding->visualizer->config.lyrics_top_outline_color = color;
-    break;
-  case COLOR_LYRICS_TOP_SHADOW:
-    binding->visualizer->config.lyrics_top_shadow_color = color;
+  case COLOR_LYRICS_TOP_GLOW:
+    binding->visualizer->config.lyrics_top_glow_color = color;
     break;
   case COLOR_LYRICS_BOTTOM_TEXT:
     binding->visualizer->config.lyrics_bottom_text_color = color;
     break;
-  case COLOR_LYRICS_BOTTOM_OUTLINE:
-    binding->visualizer->config.lyrics_bottom_outline_color = color;
-    break;
-  case COLOR_LYRICS_BOTTOM_SHADOW:
-    binding->visualizer->config.lyrics_bottom_shadow_color = color;
+  case COLOR_LYRICS_BOTTOM_GLOW:
+    binding->visualizer->config.lyrics_bottom_glow_color = color;
     break;
   }
 
@@ -2515,53 +2418,29 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
       font_control(visualizer, FONT_LYRICS_BOTTOM,
                    visualizer->config.lyrics_bottom_font,
                    "Bottom Lyrics Font");
-  GtkWidget *outline_width = gtk_spin_button_new_with_range(0.0, 6.0, 0.1);
-  GtkWidget *lyrics_top_outline_width =
-      gtk_spin_button_new_with_range(0.0, 6.0, 0.1);
-  GtkWidget *lyrics_bottom_outline_width =
-      gtk_spin_button_new_with_range(0.0, 6.0, 0.1);
-  GtkWidget *shadow_x = gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
-  GtkWidget *shadow_y = gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
-  GtkWidget *shadow_opacity =
-      gtk_spin_button_new_with_range(0.0, 1.0, 0.05);
-  GtkWidget *lyrics_top_shadow_x =
-      gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
-  GtkWidget *lyrics_top_shadow_y =
-      gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
-  GtkWidget *lyrics_top_shadow_opacity =
-      gtk_spin_button_new_with_range(0.0, 1.0, 0.05);
-  GtkWidget *lyrics_bottom_shadow_x =
-      gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
-  GtkWidget *lyrics_bottom_shadow_y =
-      gtk_spin_button_new_with_range(-64.0, 64.0, 0.5);
-  GtkWidget *lyrics_bottom_shadow_opacity =
-      gtk_spin_button_new_with_range(0.0, 1.0, 0.05);
-  GtkWidget *alpha =
-      gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
-
+  GtkWidget *glow_size = gtk_spin_button_new_with_range(0.0, 12.0, 0.1);
+  GtkWidget *glow_feather = gtk_spin_button_new_with_range(0.0, 32.0, 0.5);
+  GtkWidget *lyrics_top_glow_size =
+      gtk_spin_button_new_with_range(0.0, 12.0, 0.1);
+  GtkWidget *lyrics_top_glow_feather =
+      gtk_spin_button_new_with_range(0.0, 32.0, 0.5);
+  GtkWidget *lyrics_bottom_glow_size =
+      gtk_spin_button_new_with_range(0.0, 12.0, 0.1);
+  GtkWidget *lyrics_bottom_glow_feather =
+      gtk_spin_button_new_with_range(0.0, 32.0, 0.5);
   prepare_spin(height);
-  prepare_spin(outline_width);
-  prepare_spin(lyrics_top_outline_width);
-  prepare_spin(lyrics_bottom_outline_width);
-  prepare_spin(shadow_x);
-  prepare_spin(shadow_y);
-  prepare_spin(shadow_opacity);
-  prepare_spin(lyrics_top_shadow_x);
-  prepare_spin(lyrics_top_shadow_y);
-  prepare_spin(lyrics_top_shadow_opacity);
-  prepare_spin(lyrics_bottom_shadow_x);
-  prepare_spin(lyrics_bottom_shadow_y);
-  prepare_spin(lyrics_bottom_shadow_opacity);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(shadow_x), 1);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(shadow_y), 1);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(shadow_opacity), 2);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_top_shadow_x), 1);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_top_shadow_y), 1);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_top_shadow_opacity), 2);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_bottom_shadow_x), 1);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_bottom_shadow_y), 1);
-  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_bottom_shadow_opacity), 2);
-  prepare_scale(alpha, 2);
+  prepare_spin(glow_size);
+  prepare_spin(glow_feather);
+  prepare_spin(lyrics_top_glow_size);
+  prepare_spin(lyrics_top_glow_feather);
+  prepare_spin(lyrics_bottom_glow_size);
+  prepare_spin(lyrics_bottom_glow_feather);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(glow_size), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(glow_feather), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_top_glow_size), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_top_glow_feather), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_bottom_glow_size), 1);
+  gtk_spin_button_set_digits(GTK_SPIN_BUTTON(lyrics_bottom_glow_feather), 1);
 
   gtk_check_button_set_active(GTK_CHECK_BUTTON(enabled),
                               visualizer->config.now_playing_enabled);
@@ -2571,32 +2450,18 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
                               visualizer->config.lyrics_two_lines);
   gtk_spin_button_set_value(GTK_SPIN_BUTTON(height),
                             visualizer->config.now_playing_height);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(outline_width),
-                            visualizer->config.now_playing_outline_width);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_top_outline_width),
-                            visualizer->config.lyrics_top_outline_width);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_bottom_outline_width),
-                            visualizer->config.lyrics_bottom_outline_width);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(shadow_x),
-                            visualizer->config.now_playing_shadow_x);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(shadow_y),
-                            visualizer->config.now_playing_shadow_y);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(shadow_opacity),
-                            visualizer->config.now_playing_shadow_opacity);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_top_shadow_x),
-                            visualizer->config.lyrics_top_shadow_x);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_top_shadow_y),
-                            visualizer->config.lyrics_top_shadow_y);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_top_shadow_opacity),
-                            visualizer->config.lyrics_top_shadow_opacity);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_bottom_shadow_x),
-                            visualizer->config.lyrics_bottom_shadow_x);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_bottom_shadow_y),
-                            visualizer->config.lyrics_bottom_shadow_y);
-  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_bottom_shadow_opacity),
-                            visualizer->config.lyrics_bottom_shadow_opacity);
-  gtk_range_set_value(GTK_RANGE(alpha), visualizer->config.now_playing_alpha);
-
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(glow_size),
+                            visualizer->config.now_playing_glow_size);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(glow_feather),
+                            visualizer->config.now_playing_glow_feather);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_top_glow_size),
+                            visualizer->config.lyrics_top_glow_size);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_top_glow_feather),
+                            visualizer->config.lyrics_top_glow_feather);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_bottom_glow_size),
+                            visualizer->config.lyrics_bottom_glow_size);
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(lyrics_bottom_glow_feather),
+                            visualizer->config.lyrics_bottom_glow_feather);
   gtk_box_append(GTK_BOX(fields),
                  now_playing_field_toggle(
                      visualizer, "App", "app",
@@ -2622,44 +2487,28 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
                    G_CALLBACK(lyrics_two_lines_toggled_cb), visualizer);
   g_signal_connect(height, "value-changed",
                    G_CALLBACK(now_playing_height_changed_cb), visualizer);
-  g_signal_connect(outline_width, "value-changed",
-                   G_CALLBACK(now_playing_outline_width_changed_cb),
+  g_signal_connect(glow_size, "value-changed",
+                   G_CALLBACK(now_playing_glow_size_changed_cb), visualizer);
+  g_signal_connect(glow_feather, "value-changed",
+                   G_CALLBACK(now_playing_glow_feather_changed_cb),
                    visualizer);
-  g_signal_connect(lyrics_top_outline_width, "value-changed",
-                   G_CALLBACK(lyrics_top_outline_width_changed_cb),
+  g_signal_connect(lyrics_top_glow_size, "value-changed",
+                   G_CALLBACK(lyrics_top_glow_size_changed_cb), visualizer);
+  g_signal_connect(lyrics_top_glow_feather, "value-changed",
+                   G_CALLBACK(lyrics_top_glow_feather_changed_cb),
                    visualizer);
-  g_signal_connect(lyrics_bottom_outline_width, "value-changed",
-                   G_CALLBACK(lyrics_bottom_outline_width_changed_cb),
+  g_signal_connect(lyrics_bottom_glow_size, "value-changed",
+                   G_CALLBACK(lyrics_bottom_glow_size_changed_cb), visualizer);
+  g_signal_connect(lyrics_bottom_glow_feather, "value-changed",
+                   G_CALLBACK(lyrics_bottom_glow_feather_changed_cb),
                    visualizer);
-  g_signal_connect(shadow_x, "value-changed",
-                   G_CALLBACK(now_playing_shadow_x_changed_cb), visualizer);
-  g_signal_connect(shadow_y, "value-changed",
-                   G_CALLBACK(now_playing_shadow_y_changed_cb), visualizer);
-  g_signal_connect(shadow_opacity, "value-changed",
-                   G_CALLBACK(now_playing_shadow_opacity_changed_cb),
-                   visualizer);
-  g_signal_connect(lyrics_top_shadow_x, "value-changed",
-                   G_CALLBACK(lyrics_top_shadow_x_changed_cb), visualizer);
-  g_signal_connect(lyrics_top_shadow_y, "value-changed",
-                   G_CALLBACK(lyrics_top_shadow_y_changed_cb), visualizer);
-  g_signal_connect(lyrics_top_shadow_opacity, "value-changed",
-                   G_CALLBACK(lyrics_top_shadow_opacity_changed_cb),
-                   visualizer);
-  g_signal_connect(lyrics_bottom_shadow_x, "value-changed",
-                   G_CALLBACK(lyrics_bottom_shadow_x_changed_cb), visualizer);
-  g_signal_connect(lyrics_bottom_shadow_y, "value-changed",
-                   G_CALLBACK(lyrics_bottom_shadow_y_changed_cb), visualizer);
-  g_signal_connect(lyrics_bottom_shadow_opacity, "value-changed",
-                   G_CALLBACK(lyrics_bottom_shadow_opacity_changed_cb),
-                   visualizer);
-  g_signal_connect(alpha, "value-changed",
-                   G_CALLBACK(now_playing_alpha_changed_cb), visualizer);
-
   gtk_box_append(GTK_BOX(box), section_label("Metadata"));
   gtk_box_append(GTK_BOX(box), enabled);
   gtk_box_append(GTK_BOX(box), control_row("Fields", fields));
   gtk_box_append(GTK_BOX(box), control_row("Font", font));
-  gtk_box_append(GTK_BOX(box), control_row("Outline width", outline_width));
+  gtk_box_append(GTK_BOX(box),
+                 paired_control_row("Glow", "Size", glow_size, "Feather",
+                                    glow_feather));
   gtk_box_append(
       GTK_BOX(box),
       paired_control_row(
@@ -2667,28 +2516,18 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
           color_control(visualizer, COLOR_NOW_PLAYING_TEXT,
                         &visualizer->config.now_playing_text_color,
                         "Now Playing Text Colour"),
-          "Outline",
-          color_control(visualizer, COLOR_NOW_PLAYING_OUTLINE,
-                        &visualizer->config.now_playing_outline_color,
-                        "Now Playing Outline Colour")));
-  gtk_box_append(GTK_BOX(box),
-                 paired_control_row("Shadow offset", "X", shadow_x, "Y",
-                                    shadow_y));
-  gtk_box_append(
-      GTK_BOX(box),
-      paired_control_row("Shadow", "Colour",
-                         color_control(visualizer, COLOR_NOW_PLAYING_SHADOW,
-                                       &visualizer->config
-                                            .now_playing_shadow_color,
-                                       "Now Playing Shadow Colour"),
-                         "Opacity", shadow_opacity));
+          "Glow",
+          color_control(visualizer, COLOR_NOW_PLAYING_GLOW,
+                        &visualizer->config.now_playing_glow_color,
+                        "Now Playing Glow Colour")));
   gtk_box_append(GTK_BOX(box), section_label("Lyrics"));
   gtk_box_append(GTK_BOX(box), lyrics);
   gtk_box_append(GTK_BOX(box), two_lines);
   gtk_box_append(GTK_BOX(box), section_label("Top Lyric"));
   gtk_box_append(GTK_BOX(box), control_row("Top font", lyrics_top_font));
   gtk_box_append(GTK_BOX(box),
-                 control_row("Outline width", lyrics_top_outline_width));
+                 paired_control_row("Glow", "Size", lyrics_top_glow_size,
+                                    "Feather", lyrics_top_glow_feather));
   gtk_box_append(
       GTK_BOX(box),
       paired_control_row(
@@ -2696,25 +2535,15 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
           color_control(visualizer, COLOR_LYRICS_TOP_TEXT,
                         &visualizer->config.lyrics_top_text_color,
                         "Top Lyrics Text Colour"),
-          "Outline",
-          color_control(visualizer, COLOR_LYRICS_TOP_OUTLINE,
-                        &visualizer->config.lyrics_top_outline_color,
-                        "Top Lyrics Outline Colour")));
-  gtk_box_append(GTK_BOX(box),
-                 paired_control_row("Shadow offset", "X", lyrics_top_shadow_x,
-                                    "Y", lyrics_top_shadow_y));
-  gtk_box_append(
-      GTK_BOX(box),
-      paired_control_row(
-          "Shadow", "Colour",
-          color_control(visualizer, COLOR_LYRICS_TOP_SHADOW,
-                        &visualizer->config.lyrics_top_shadow_color,
-                        "Top Lyrics Shadow Colour"),
-          "Opacity", lyrics_top_shadow_opacity));
+          "Glow",
+          color_control(visualizer, COLOR_LYRICS_TOP_GLOW,
+                        &visualizer->config.lyrics_top_glow_color,
+                        "Top Lyrics Glow Colour")));
   gtk_box_append(GTK_BOX(box), section_label("Bottom Lyric"));
   gtk_box_append(GTK_BOX(box), control_row("Bottom font", lyrics_bottom_font));
   gtk_box_append(GTK_BOX(box),
-                 control_row("Outline width", lyrics_bottom_outline_width));
+                 paired_control_row("Glow", "Size", lyrics_bottom_glow_size,
+                                    "Feather", lyrics_bottom_glow_feather));
   gtk_box_append(
       GTK_BOX(box),
       paired_control_row(
@@ -2722,26 +2551,13 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
           color_control(visualizer, COLOR_LYRICS_BOTTOM_TEXT,
                         &visualizer->config.lyrics_bottom_text_color,
                         "Bottom Lyrics Text Colour"),
-          "Outline",
-          color_control(visualizer, COLOR_LYRICS_BOTTOM_OUTLINE,
-                        &visualizer->config.lyrics_bottom_outline_color,
-                        "Bottom Lyrics Outline Colour")));
-  gtk_box_append(GTK_BOX(box),
-                 paired_control_row("Shadow offset", "X",
-                                    lyrics_bottom_shadow_x, "Y",
-                                    lyrics_bottom_shadow_y));
-  gtk_box_append(
-      GTK_BOX(box),
-      paired_control_row(
-          "Shadow", "Colour",
-          color_control(visualizer, COLOR_LYRICS_BOTTOM_SHADOW,
-                        &visualizer->config.lyrics_bottom_shadow_color,
-                        "Bottom Lyrics Shadow Colour"),
-          "Opacity", lyrics_bottom_shadow_opacity));
+          "Glow",
+          color_control(visualizer, COLOR_LYRICS_BOTTOM_GLOW,
+                        &visualizer->config.lyrics_bottom_glow_color,
+                        "Bottom Lyrics Glow Colour")));
   gtk_box_append(GTK_BOX(box), section_label("Bottom Section"));
   gtk_box_append(GTK_BOX(box),
                  control_row("Height", height));
-  gtk_box_append(GTK_BOX(box), control_row("Background alpha", alpha));
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
   return scroller;
 }

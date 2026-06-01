@@ -162,19 +162,12 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->silence_fade_seconds = 0.6;
   config->background_alpha = 0.0;
   config->bar_alpha = 0.35;
-  config->now_playing_alpha = 0.72;
-  config->now_playing_outline_width = 1.2;
-  config->now_playing_shadow_x = 2.0;
-  config->now_playing_shadow_y = 2.0;
-  config->now_playing_shadow_opacity = 0.0;
-  config->lyrics_top_outline_width = 1.2;
-  config->lyrics_top_shadow_x = 2.0;
-  config->lyrics_top_shadow_y = 2.0;
-  config->lyrics_top_shadow_opacity = 0.0;
-  config->lyrics_bottom_outline_width = 1.2;
-  config->lyrics_bottom_shadow_x = 2.0;
-  config->lyrics_bottom_shadow_y = 2.0;
-  config->lyrics_bottom_shadow_opacity = 0.0;
+  config->now_playing_glow_size = 1.2;
+  config->now_playing_glow_feather = 2.0;
+  config->lyrics_top_glow_size = 1.2;
+  config->lyrics_top_glow_feather = 2.0;
+  config->lyrics_bottom_glow_size = 1.2;
+  config->lyrics_bottom_glow_feather = 2.0;
   config->fft_equalize = TRUE;
   config->now_playing_enabled = TRUE;
   config->now_playing_show_app = TRUE;
@@ -188,14 +181,11 @@ void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   set_rgba(&config->peak_color, 1.0, 0.92, 0.20, 1.0);
   set_rgba(&config->background_color, 0.0, 0.0, 0.0, 0.0);
   set_rgba(&config->now_playing_text_color, 1.0, 1.0, 1.0, 1.0);
-  set_rgba(&config->now_playing_outline_color, 0.0, 0.0, 0.0, 1.0);
-  set_rgba(&config->now_playing_shadow_color, 0.0, 0.0, 0.0, 1.0);
+  set_rgba(&config->now_playing_glow_color, 0.0, 0.0, 0.0, 1.0);
   set_rgba(&config->lyrics_top_text_color, 1.0, 1.0, 1.0, 1.0);
-  set_rgba(&config->lyrics_top_outline_color, 0.0, 0.0, 0.0, 1.0);
-  set_rgba(&config->lyrics_top_shadow_color, 0.0, 0.0, 0.0, 1.0);
+  set_rgba(&config->lyrics_top_glow_color, 0.0, 0.0, 0.0, 1.0);
   set_rgba(&config->lyrics_bottom_text_color, 1.0, 1.0, 1.0, 1.0);
-  set_rgba(&config->lyrics_bottom_outline_color, 0.0, 0.0, 0.0, 1.0);
-  set_rgba(&config->lyrics_bottom_shadow_color, 0.0, 0.0, 0.0, 1.0);
+  set_rgba(&config->lyrics_bottom_glow_color, 0.0, 0.0, 0.0, 1.0);
   g_strlcpy(config->now_playing_font, "Sans 13",
             sizeof(config->now_playing_font));
   g_strlcpy(config->lyrics_top_font, "Sans 12",
@@ -315,27 +305,14 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
   load_font_setting(key_file, "Now Playing", "font", "font_family",
                     "font_size", config->now_playing_font,
                     sizeof(config->now_playing_font));
-  if (has_key(key_file, "Now Playing", "outline_width"))
-    config->now_playing_outline_width =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing", "outline_width",
-                                    NULL),
-              0.0, 6.0);
-  if (has_key(key_file, "Now Playing", "shadow_x"))
-    config->now_playing_shadow_x =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing", "shadow_x", NULL),
-              -64.0, 64.0);
-  if (has_key(key_file, "Now Playing", "shadow_y"))
-    config->now_playing_shadow_y =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing", "shadow_y", NULL),
-              -64.0, 64.0);
-  if (has_key(key_file, "Now Playing", "shadow_opacity"))
-    config->now_playing_shadow_opacity = CLAMP(
-        g_key_file_get_double(key_file, "Now Playing", "shadow_opacity", NULL),
-        0.0, 1.0);
-  if (has_key(key_file, "Now Playing", "alpha"))
-    config->now_playing_alpha =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing", "alpha", NULL),
-              0.0, 1.0);
+  if (has_key(key_file, "Now Playing", "glow_size"))
+    config->now_playing_glow_size =
+        CLAMP(g_key_file_get_double(key_file, "Now Playing", "glow_size", NULL),
+              0.0, 12.0);
+  if (has_key(key_file, "Now Playing", "glow_feather"))
+    config->now_playing_glow_feather = CLAMP(
+        g_key_file_get_double(key_file, "Now Playing", "glow_feather", NULL),
+        0.0, 32.0);
   if (has_key(key_file, "Now Playing", "show_app"))
     config->now_playing_show_app =
         g_key_file_get_boolean(key_file, "Now Playing", "show_app", NULL);
@@ -376,102 +353,47 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
     g_strlcpy(config->lyrics_bottom_font, config->lyrics_top_font,
               sizeof(config->lyrics_bottom_font));
   }
-  if (has_key(key_file, "Now Playing", "lyrics_top_outline_width"))
-    config->lyrics_top_outline_width =
+  if (has_key(key_file, "Now Playing", "lyrics_top_glow_size"))
+    config->lyrics_top_glow_size =
         CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_top_outline_width", NULL),
-              0.0, 6.0);
-  else if (has_key(key_file, "Now Playing", "lyrics_outline_width"))
-    config->lyrics_top_outline_width =
+                                    "lyrics_top_glow_size", NULL),
+              0.0, 12.0);
+  if (has_key(key_file, "Now Playing", "lyrics_top_glow_feather"))
+    config->lyrics_top_glow_feather =
         CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_outline_width", NULL),
-              0.0, 6.0);
-  if (has_key(key_file, "Now Playing", "lyrics_bottom_outline_width"))
-    config->lyrics_bottom_outline_width =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_bottom_outline_width", NULL),
-              0.0, 6.0);
-  else
-    config->lyrics_bottom_outline_width = config->lyrics_top_outline_width;
+                                    "lyrics_top_glow_feather", NULL),
+              0.0, 32.0);
 
-  if (has_key(key_file, "Now Playing", "lyrics_top_shadow_x"))
-    config->lyrics_top_shadow_x =
+  if (has_key(key_file, "Now Playing", "lyrics_bottom_glow_size"))
+    config->lyrics_bottom_glow_size =
         CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_top_shadow_x", NULL),
-              -64.0, 64.0);
-  else if (has_key(key_file, "Now Playing", "lyrics_shadow_x"))
-    config->lyrics_top_shadow_x = CLAMP(
-        g_key_file_get_double(key_file, "Now Playing", "lyrics_shadow_x", NULL),
-        -64.0, 64.0);
-  if (has_key(key_file, "Now Playing", "lyrics_top_shadow_y"))
-    config->lyrics_top_shadow_y =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_top_shadow_y", NULL),
-              -64.0, 64.0);
-  else if (has_key(key_file, "Now Playing", "lyrics_shadow_y"))
-    config->lyrics_top_shadow_y = CLAMP(
-        g_key_file_get_double(key_file, "Now Playing", "lyrics_shadow_y", NULL),
-        -64.0, 64.0);
-  if (has_key(key_file, "Now Playing", "lyrics_top_shadow_opacity"))
-    config->lyrics_top_shadow_opacity =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_top_shadow_opacity", NULL),
-              0.0, 1.0);
-  else if (has_key(key_file, "Now Playing", "lyrics_shadow_opacity"))
-    config->lyrics_top_shadow_opacity =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_shadow_opacity", NULL),
-              0.0, 1.0);
-
-  if (has_key(key_file, "Now Playing", "lyrics_bottom_shadow_x"))
-    config->lyrics_bottom_shadow_x =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_bottom_shadow_x", NULL),
-              -64.0, 64.0);
+                                    "lyrics_bottom_glow_size", NULL),
+              0.0, 12.0);
   else
-    config->lyrics_bottom_shadow_x = config->lyrics_top_shadow_x;
-  if (has_key(key_file, "Now Playing", "lyrics_bottom_shadow_y"))
-    config->lyrics_bottom_shadow_y =
+    config->lyrics_bottom_glow_size = config->lyrics_top_glow_size;
+  if (has_key(key_file, "Now Playing", "lyrics_bottom_glow_feather"))
+    config->lyrics_bottom_glow_feather =
         CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_bottom_shadow_y", NULL),
-              -64.0, 64.0);
+                                    "lyrics_bottom_glow_feather", NULL),
+              0.0, 32.0);
   else
-    config->lyrics_bottom_shadow_y = config->lyrics_top_shadow_y;
-  if (has_key(key_file, "Now Playing", "lyrics_bottom_shadow_opacity"))
-    config->lyrics_bottom_shadow_opacity =
-        CLAMP(g_key_file_get_double(key_file, "Now Playing",
-                                    "lyrics_bottom_shadow_opacity", NULL),
-              0.0, 1.0);
-  else
-    config->lyrics_bottom_shadow_opacity = config->lyrics_top_shadow_opacity;
+    config->lyrics_bottom_glow_feather = config->lyrics_top_glow_feather;
 
   get_color(key_file, "Now Playing", "lyrics_top_text_color",
             &config->lyrics_top_text_color);
-  get_color(key_file, "Now Playing", "lyrics_top_outline_color",
-            &config->lyrics_top_outline_color);
-  get_color(key_file, "Now Playing", "lyrics_top_shadow_color",
-            &config->lyrics_top_shadow_color);
+  get_color(key_file, "Now Playing", "lyrics_top_glow_color",
+            &config->lyrics_top_glow_color);
   get_color(key_file, "Now Playing", "lyrics_bottom_text_color",
             &config->lyrics_bottom_text_color);
-  get_color(key_file, "Now Playing", "lyrics_bottom_outline_color",
-            &config->lyrics_bottom_outline_color);
-  get_color(key_file, "Now Playing", "lyrics_bottom_shadow_color",
-            &config->lyrics_bottom_shadow_color);
+  get_color(key_file, "Now Playing", "lyrics_bottom_glow_color",
+            &config->lyrics_bottom_glow_color);
   if (!has_key(key_file, "Now Playing", "lyrics_top_text_color"))
     get_color(key_file, "Now Playing", "lyrics_text_color",
               &config->lyrics_top_text_color);
-  if (!has_key(key_file, "Now Playing", "lyrics_top_outline_color"))
-    get_color(key_file, "Now Playing", "lyrics_outline_color",
-              &config->lyrics_top_outline_color);
-  if (!has_key(key_file, "Now Playing", "lyrics_top_shadow_color"))
-    get_color(key_file, "Now Playing", "lyrics_shadow_color",
-              &config->lyrics_top_shadow_color);
   if (!has_key(key_file, "Now Playing", "lyrics_bottom_text_color"))
     config->lyrics_bottom_text_color = config->lyrics_top_text_color;
-  if (!has_key(key_file, "Now Playing", "lyrics_bottom_outline_color"))
-    config->lyrics_bottom_outline_color = config->lyrics_top_outline_color;
-  if (!has_key(key_file, "Now Playing", "lyrics_bottom_shadow_color"))
-    config->lyrics_bottom_shadow_color = config->lyrics_top_shadow_color;
+  if (!has_key(key_file, "Now Playing", "lyrics_bottom_glow_color"))
+    config->lyrics_bottom_glow_color = config->lyrics_top_glow_color;
 
   if (has_key(key_file, "Style", "block_height"))
     config->block_height =
@@ -510,10 +432,8 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
   set_rgba(&config->background_color, 0.0, 0.0, 0.0, 0.0);
   get_color(key_file, "Now Playing", "text_color",
             &config->now_playing_text_color);
-  get_color(key_file, "Now Playing", "outline_color",
-            &config->now_playing_outline_color);
-  get_color(key_file, "Now Playing", "shadow_color",
-            &config->now_playing_shadow_color);
+  get_color(key_file, "Now Playing", "glow_color",
+            &config->now_playing_glow_color);
 
 done:
   g_free(path);
@@ -567,16 +487,10 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
                          config->now_playing_height);
   g_key_file_set_string(key_file, "Now Playing", "font",
                         config->now_playing_font);
-  g_key_file_set_double(key_file, "Now Playing", "outline_width",
-                        config->now_playing_outline_width);
-  g_key_file_set_double(key_file, "Now Playing", "shadow_x",
-                        config->now_playing_shadow_x);
-  g_key_file_set_double(key_file, "Now Playing", "shadow_y",
-                        config->now_playing_shadow_y);
-  g_key_file_set_double(key_file, "Now Playing", "shadow_opacity",
-                        config->now_playing_shadow_opacity);
-  g_key_file_set_double(key_file, "Now Playing", "alpha",
-                        config->now_playing_alpha);
+  g_key_file_set_double(key_file, "Now Playing", "glow_size",
+                        config->now_playing_glow_size);
+  g_key_file_set_double(key_file, "Now Playing", "glow_feather",
+                        config->now_playing_glow_feather);
   g_key_file_set_boolean(key_file, "Now Playing", "show_app",
                          config->now_playing_show_app);
   g_key_file_set_boolean(key_file, "Now Playing", "show_title",
@@ -593,23 +507,14 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
                         config->lyrics_top_font);
   g_key_file_set_string(key_file, "Now Playing", "lyrics_bottom_font",
                         config->lyrics_bottom_font);
-  g_key_file_set_double(key_file, "Now Playing", "lyrics_top_outline_width",
-                        config->lyrics_top_outline_width);
-  g_key_file_set_double(key_file, "Now Playing", "lyrics_top_shadow_x",
-                        config->lyrics_top_shadow_x);
-  g_key_file_set_double(key_file, "Now Playing", "lyrics_top_shadow_y",
-                        config->lyrics_top_shadow_y);
-  g_key_file_set_double(key_file, "Now Playing", "lyrics_top_shadow_opacity",
-                        config->lyrics_top_shadow_opacity);
-  g_key_file_set_double(key_file, "Now Playing", "lyrics_bottom_outline_width",
-                        config->lyrics_bottom_outline_width);
-  g_key_file_set_double(key_file, "Now Playing", "lyrics_bottom_shadow_x",
-                        config->lyrics_bottom_shadow_x);
-  g_key_file_set_double(key_file, "Now Playing", "lyrics_bottom_shadow_y",
-                        config->lyrics_bottom_shadow_y);
-  g_key_file_set_double(key_file, "Now Playing",
-                        "lyrics_bottom_shadow_opacity",
-                        config->lyrics_bottom_shadow_opacity);
+  g_key_file_set_double(key_file, "Now Playing", "lyrics_top_glow_size",
+                        config->lyrics_top_glow_size);
+  g_key_file_set_double(key_file, "Now Playing", "lyrics_top_glow_feather",
+                        config->lyrics_top_glow_feather);
+  g_key_file_set_double(key_file, "Now Playing", "lyrics_bottom_glow_size",
+                        config->lyrics_bottom_glow_size);
+  g_key_file_set_double(key_file, "Now Playing", "lyrics_bottom_glow_feather",
+                        config->lyrics_bottom_glow_feather);
 
   g_key_file_set_integer(key_file, "Style", "block_height",
                          config->block_height);
@@ -625,22 +530,16 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
   set_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
   set_color(key_file, "Now Playing", "text_color",
             &config->now_playing_text_color);
-  set_color(key_file, "Now Playing", "outline_color",
-            &config->now_playing_outline_color);
-  set_color(key_file, "Now Playing", "shadow_color",
-            &config->now_playing_shadow_color);
+  set_color(key_file, "Now Playing", "glow_color",
+            &config->now_playing_glow_color);
   set_color(key_file, "Now Playing", "lyrics_top_text_color",
             &config->lyrics_top_text_color);
-  set_color(key_file, "Now Playing", "lyrics_top_outline_color",
-            &config->lyrics_top_outline_color);
-  set_color(key_file, "Now Playing", "lyrics_top_shadow_color",
-            &config->lyrics_top_shadow_color);
+  set_color(key_file, "Now Playing", "lyrics_top_glow_color",
+            &config->lyrics_top_glow_color);
   set_color(key_file, "Now Playing", "lyrics_bottom_text_color",
             &config->lyrics_bottom_text_color);
-  set_color(key_file, "Now Playing", "lyrics_bottom_outline_color",
-            &config->lyrics_bottom_outline_color);
-  set_color(key_file, "Now Playing", "lyrics_bottom_shadow_color",
-            &config->lyrics_bottom_shadow_color);
+  set_color(key_file, "Now Playing", "lyrics_bottom_glow_color",
+            &config->lyrics_bottom_glow_color);
 
   char *data = g_key_file_to_data(key_file, &length, NULL);
   g_mkdir_with_parents(dir, 0700);

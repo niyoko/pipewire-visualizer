@@ -37,7 +37,7 @@ content, stays above normal windows, and is fully click-through.
 - MPRIS Now Playing metadata for player app, track title, artist, and album,
   with elapsed/total timer when available, configurable displayed fields,
   compact metadata-only layout when lyrics are unavailable, strip height,
-  background alpha, font, colour, and outline. The displayed timer freezes while
+  font, colour, and glow. The displayed timer freezes while
   playback is paused.
 - LRCLIB lyric fetching in a background worker with on-disk JSON cache under
   `~/.cache/pipewire-visualizer/lyrics/`.
@@ -47,7 +47,7 @@ content, stays above normal windows, and is fully click-through.
 - Per-song lyric timing offset stored in the cached lyric JSON as
   `pwvizOffsetMs`; adjust it with `Ctrl+Shift+Left` and `Ctrl+Shift+Right` in
   250 ms steps.
-- Separate native font, text colour, outline colour, outline width, and shadow
+- Separate native font, text colour, glow colour, glow size, and glow feather
   settings for Now Playing metadata, top lyrics, and bottom lyrics.
 
 ## Screen Recording
@@ -176,13 +176,13 @@ The Now Playing section uses MPRIS metadata from the session bus when a player
 provides it. It can show the player app, track title, artist, and album in a
 bottom strip, prefixed by an elapsed/total timer when the player provides
 duration. The strip has configurable visibility, height,
-metadata font family, style, size, metadata colour, outline colour, outline
-width, and background alpha. If lyrics are disabled, unavailable, or fail to
-load, the strip compacts to the metadata row instead of reserving an empty lyric
-row. When lyrics are enabled, the app fetches synced lyrics from LRCLIB in a
+metadata font family, style, size, metadata colour, glow colour, glow size,
+and glow feather. If lyrics are disabled, unavailable, or fail to load, the
+strip compacts to the metadata row instead of reserving an empty lyric row. When
+lyrics are enabled, the app fetches synced lyrics from LRCLIB in a
 background worker, caches responses on disk, and displays the current line plus
 an optional next line like a karaoke view. Plain, untimed lyrics are ignored. The
-top and bottom lyric lines have separate font, colour, outline, and shadow
+top and bottom lyric lines have separate font, colour, and glow
 settings. Lyrics retain timed blank lines and show a 3/2/1-dot countdown during
 the final 3 seconds before lyrics resume after a blank gap.
 Use `Ctrl+Shift+Left` and `Ctrl+Shift+Right` while a song is playing to adjust
