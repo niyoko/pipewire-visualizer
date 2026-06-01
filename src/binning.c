@@ -50,10 +50,12 @@ void pwviz_binner_calculate(PwvizBinner *binner, const float *magnitudes,
                             float *levels, const PwvizAppConfig *config) {
   int bar_count = CLAMP(config->bar_count, 1, PWVIZ_BAR_COUNT);
   float scale = MAX(config->fft_scale, 0.1f);
+  float inv_scale = 1.0f / scale;
 
   init_log_bar_table(binner, bar_count);
 
   int bin = SPECTRUM_MIN_BIN;
+  gboolean average_mode = config->level_mode == PWVIZ_LEVEL_AVERAGE;
 
   for (int b = 0; b < bar_count; b++) {
     int start_bin = bin;
@@ -61,26 +63,33 @@ void pwviz_binner_calculate(PwvizBinner *binner, const float *magnitudes,
     if (end_bin > PWVIZ_FFT_SIZE / 2 + 1)
       end_bin = PWVIZ_FFT_SIZE / 2 + 1;
 
-    float peak = 0.0f;
-    float sum_sq = 0.0f;
-    int count = 0;
+    float value = 0.0f;
 
-    for (int i = start_bin; i < end_bin; i++) {
-      float magnitude = CLAMP(magnitudes[i] / scale, 0.0f, 255.0f);
+    if (average_mode) {
+      float sum_sq = 0.0f;
+      int count = end_bin - start_bin;
 
-      if (magnitude > peak)
-        peak = magnitude;
+      for (int i = start_bin; i < end_bin; i++) {
+        float magnitude = CLAMP(magnitudes[i] * inv_scale, 0.0f, 255.0f);
 
-      sum_sq += magnitude * magnitude;
-      count++;
+        sum_sq += magnitude * magnitude;
+      }
+
+      value = count > 0 ? sqrtf(sum_sq / (float)count) / 255.0f : 0.0f;
+    } else {
+      float peak = 0.0f;
+
+      for (int i = start_bin; i < end_bin; i++) {
+        float magnitude = CLAMP(magnitudes[i] * inv_scale, 0.0f, 255.0f);
+
+        if (magnitude > peak)
+          peak = magnitude;
+      }
+
+      value = peak / 255.0f;
     }
 
     bin = end_bin;
-
-    float rms = count > 0 ? sqrtf(sum_sq / count) : 0.0f;
-    float value =
-        config->level_mode == PWVIZ_LEVEL_AVERAGE ? rms / 255.0f
-                                                  : peak / 255.0f;
 
     levels[b] = CLAMP(value, 0.0f, 1.0f);
   }

@@ -976,18 +976,17 @@ static void ensure_spectrum_surface(PwvizVisualizer *visualizer, int width,
 }
 
 static void draw_spectrum_bar(PwvizVisualizer *visualizer, cairo_t *cr,
-                              int bar_index, int width,
+                              int bar_index, int width, int bar_count,
                               int spectrum_height) {
-  int bar_count = effective_bar_count(visualizer, width);
   double bar_w = (double)width / bar_count;
   double block_h = visualizer->config.block_height;
   double block_gap = visualizer->config.block_gap;
   double block_w = MAX(1.0, bar_w - visualizer->config.x_spacing);
   double x = bar_index * bar_w;
   double bar_x = x + visualizer->config.x_spacing / 2.0;
-  double clear_x = MAX(0.0, floor(x));
-  double clear_right = MIN((double)width, ceil(x + bar_w));
-  double clear_w = MAX(0.0, clear_right - clear_x);
+  int clear_x = (bar_index * width) / bar_count;
+  int clear_right = ((bar_index + 1) * width + bar_count - 1) / bar_count;
+  int clear_w = MAX(0, clear_right - clear_x);
 
   cairo_save(cr);
   cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
@@ -1123,7 +1122,8 @@ static gboolean update_spectrum_surface(PwvizVisualizer *visualizer) {
     if (!visualizer->dirty_bars[i])
       continue;
 
-    draw_spectrum_bar(visualizer, surface_cr, i, width, spectrum_height);
+    draw_spectrum_bar(visualizer, surface_cr, i, width, bar_count,
+                      spectrum_height);
     visualizer->dirty_bars[i] = FALSE;
     any_dirty = TRUE;
   }
