@@ -17,6 +17,9 @@
 #define COLOR_CACHE_LEVELS 256
 #define SILENCE_SAMPLE_THRESHOLD 0.00001f
 #define LYRICS_EDITOR_MAX_OFFSET_MS 600000
+#define MPRIS_PREFIX "org.mpris.MediaPlayer2."
+#define MPRIS_PLAYER_IFACE "org.mpris.MediaPlayer2.Player"
+#define DBUS_PROPERTIES_IFACE "org.freedesktop.DBus.Properties"
 
 typedef struct {
   double red;
@@ -70,6 +73,11 @@ typedef struct {
   int now_playing_cached_height;
   guint animation_source;
   guint now_playing_source;
+  guint now_playing_signal_source;
+  GDBusConnection *mpris_connection;
+  guint mpris_properties_subscription;
+  guint mpris_seeked_subscription;
+  guint mpris_name_owner_subscription;
   guint lyrics_editor_source;
   GAsyncQueue *lyrics_results;
   gboolean lyrics_fetching;
@@ -130,6 +138,7 @@ typedef enum {
 
 static void apply_layer_position(PwvizVisualizer *visualizer);
 static void apply_window_geometry(PwvizVisualizer *visualizer);
+static gboolean now_playing_refresh_cb(gpointer data);
 
 static const AnchorOption ANCHOR_OPTIONS[] = {
     {PWVIZ_ANCHOR_TOP_LEFT, "Top left"},
@@ -1282,6 +1291,65 @@ static void refresh_now_playing(PwvizVisualizer *visualizer) {
   pwviz_now_playing_refresh(&visualizer->now_playing);
 }
 
+static gboolean now_playing_signal_refresh_cb(gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  if (!visualizer || visualizer->destroying)
+    return G_SOURCE_REMOVE;
+
+  visualizer->now_playing_signal_source = 0;
+  now_playing_refresh_cb(visualizer);
+  return G_SOURCE_REMOVE;
+}
+
+static void schedule_now_playing_signal_refresh(PwvizVisualizer *visualizer) {
+  if (!visualizer || visualizer->destroying ||
+      visualizer->now_playing_signal_source)
+    return;
+
+  visualizer->now_playing_signal_source =
+      g_idle_add(now_playing_signal_refresh_cb, visualizer);
+}
+
+static void mpris_player_changed_cb(GDBusConnection *connection,
+                                    const char *sender_name,
+                                    const char *object_path,
+                                    const char *interface_name,
+                                    const char *signal_name,
+                                    GVariant *parameters, gpointer data) {
+  (void)connection;
+  (void)sender_name;
+  (void)object_path;
+  (void)interface_name;
+  (void)signal_name;
+  (void)parameters;
+
+  schedule_now_playing_signal_refresh(data);
+}
+
+static void mpris_name_owner_changed_cb(GDBusConnection *connection,
+                                        const char *sender_name,
+                                        const char *object_path,
+                                        const char *interface_name,
+                                        const char *signal_name,
+                                        GVariant *parameters, gpointer data) {
+  const char *name = NULL;
+  const char *old_owner = NULL;
+  const char *new_owner = NULL;
+
+  (void)connection;
+  (void)sender_name;
+  (void)object_path;
+  (void)interface_name;
+  (void)signal_name;
+
+  g_variant_get(parameters, "(&s&s&s)", &name, &old_owner, &new_owner);
+  (void)old_owner;
+  (void)new_owner;
+  if (g_str_has_prefix(name, MPRIS_PREFIX))
+    schedule_now_playing_signal_refresh(data);
+}
+
 static gboolean now_playing_refresh_cb(gpointer data) {
   PwvizVisualizer *visualizer = data;
   gboolean was_available = visualizer->now_playing.available;
@@ -1299,6 +1367,29 @@ static gboolean now_playing_refresh_cb(gpointer data) {
     invalidate_now_playing_height(visualizer);
   queue_visualizer_draw(visualizer);
   return G_SOURCE_CONTINUE;
+}
+
+static void subscribe_mpris_signals(PwvizVisualizer *visualizer) {
+  visualizer->mpris_connection = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
+  if (!visualizer->mpris_connection)
+    return;
+
+  visualizer->mpris_properties_subscription =
+      g_dbus_connection_signal_subscribe(
+          visualizer->mpris_connection, NULL, DBUS_PROPERTIES_IFACE,
+          "PropertiesChanged", "/org/mpris/MediaPlayer2", MPRIS_PLAYER_IFACE,
+          G_DBUS_SIGNAL_FLAGS_NONE, mpris_player_changed_cb, visualizer, NULL);
+  visualizer->mpris_seeked_subscription =
+      g_dbus_connection_signal_subscribe(
+          visualizer->mpris_connection, NULL, MPRIS_PLAYER_IFACE, "Seeked",
+          "/org/mpris/MediaPlayer2", NULL, G_DBUS_SIGNAL_FLAGS_NONE,
+          mpris_player_changed_cb, visualizer, NULL);
+  visualizer->mpris_name_owner_subscription =
+      g_dbus_connection_signal_subscribe(
+          visualizer->mpris_connection, "org.freedesktop.DBus",
+          "org.freedesktop.DBus", "NameOwnerChanged", "/org/freedesktop/DBus",
+          NULL, G_DBUS_SIGNAL_FLAGS_NONE, mpris_name_owner_changed_cb,
+          visualizer, NULL);
 }
 
 static void save_current_config(PwvizVisualizer *visualizer) {
@@ -3131,6 +3222,7 @@ static void visualizer_init(PwvizVisualizer *visualizer,
   visualizer->height = visualizer->config.window_height;
   visualizer->audio_silent = TRUE;
   visualizer->silence_fade_alpha = 0.0;
+  subscribe_mpris_signals(visualizer);
   if (visualizer->config.now_playing_enabled) {
     refresh_now_playing(visualizer);
     maybe_start_lyrics_fetch(visualizer);
@@ -3148,6 +3240,24 @@ static void visualizer_free(PwvizVisualizer *visualizer) {
     g_source_remove(visualizer->animation_source);
   if (visualizer->now_playing_source)
     g_source_remove(visualizer->now_playing_source);
+  if (visualizer->now_playing_signal_source) {
+    g_source_remove(visualizer->now_playing_signal_source);
+    visualizer->now_playing_signal_source = 0;
+  }
+  if (visualizer->mpris_connection) {
+    if (visualizer->mpris_properties_subscription)
+      g_dbus_connection_signal_unsubscribe(
+          visualizer->mpris_connection,
+          visualizer->mpris_properties_subscription);
+    if (visualizer->mpris_seeked_subscription)
+      g_dbus_connection_signal_unsubscribe(visualizer->mpris_connection,
+                                           visualizer->mpris_seeked_subscription);
+    if (visualizer->mpris_name_owner_subscription)
+      g_dbus_connection_signal_unsubscribe(
+          visualizer->mpris_connection,
+          visualizer->mpris_name_owner_subscription);
+    g_object_unref(visualizer->mpris_connection);
+  }
   if (visualizer->lyrics_editor_source) {
     g_source_remove(visualizer->lyrics_editor_source);
     visualizer->lyrics_editor_source = 0;
