@@ -1278,25 +1278,8 @@ static void maybe_start_lyrics_fetch(PwvizVisualizer *visualizer) {
   g_thread_unref(g_thread_new("lyrics-fetch", lyrics_fetch_thread, fetch));
 }
 
-static gboolean same_now_playing_track(const PwvizNowPlaying *a,
-                                       const PwvizNowPlaying *b) {
-  return a->available && b->available && a->duration_us == b->duration_us &&
-         g_strcmp0(a->app, b->app) == 0 &&
-         g_strcmp0(a->title, b->title) == 0 &&
-         g_strcmp0(a->artist, b->artist) == 0 &&
-         g_strcmp0(a->album, b->album) == 0;
-}
-
 static void refresh_now_playing(PwvizVisualizer *visualizer) {
-  PwvizNowPlaying previous = visualizer->now_playing;
-
-  if (!pwviz_now_playing_refresh(&visualizer->now_playing))
-    return;
-
-  if (visualizer->now_playing.status == PWVIZ_PLAYBACK_PAUSED &&
-      previous.status == PWVIZ_PLAYBACK_PAUSED &&
-      same_now_playing_track(&previous, &visualizer->now_playing))
-    visualizer->now_playing.position_us = previous.position_us;
+  pwviz_now_playing_refresh(&visualizer->now_playing);
 }
 
 static gboolean now_playing_refresh_cb(gpointer data) {
@@ -3243,7 +3226,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
   visualizer->global_shortcut =
       pwviz_global_shortcut_register(global_shortcut_cb, visualizer);
   visualizer->now_playing_source =
-      g_timeout_add_seconds(1, now_playing_refresh_cb, visualizer);
+      g_timeout_add(250, now_playing_refresh_cb, visualizer);
   restart_animation_source(visualizer);
   g_signal_connect_swapped(window, "map", G_CALLBACK(update_input_region),
                            visualizer);
