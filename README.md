@@ -128,7 +128,7 @@ makepkg -si
 ## Build
 
 ```sh
-meson setup build
+meson setup build --buildtype=release -Db_lto=true -Dnative_cpu=true
 meson compile -C build
 ```
 

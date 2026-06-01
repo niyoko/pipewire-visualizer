@@ -1,6 +1,13 @@
 project('pipewire-visualizer', 'c', default_options: ['warning_level=2'])
 
 cc = meson.get_compiler('c')
+if get_option('native_cpu')
+  add_project_arguments(
+    cc.get_supported_arguments(['-march=native', '-mtune=native']),
+    language: 'c',
+  )
+endif
+
 m_dep = cc.find_library('m', required: true)
 
 deps = [

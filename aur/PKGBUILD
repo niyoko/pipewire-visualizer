@@ -17,7 +17,9 @@ sha256sums=('SKIP')
 build() {
   meson setup build "${pkgname}-${pkgver}" \
     --prefix=/usr \
-    --buildtype=plain \
+    --buildtype=release \
+    -Db_lto=true \
+    -Dnative_cpu=true \
     --wrap-mode=nodownload
   meson compile -C build
 }

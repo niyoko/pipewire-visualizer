@@ -1,0 +1,6 @@
+option(
+  'native_cpu',
+  type: 'boolean',
+  value: true,
+  description: 'Build with native CPU tuning flags for locally built packages',
+)
