@@ -45,8 +45,9 @@ content, stays above normal windows, and is fully click-through.
   timed blank lyric lines, and a 3/2/1-dot countdown during the final 3 seconds
   before lyrics resume after a blank gap.
 - Per-song lyric timing offset stored in the cached lyric JSON as
-  `pwvizOffsetMs`; adjust it with `Ctrl+Shift+Left` and `Ctrl+Shift+Right` in
-  250 ms steps.
+  `pwvizOffsetMs`.
+- Lyrics editor for the current song, with pasteable timestamped lyrics, offset
+  editing, and active-row highlighting for timing preview.
 - Separate native font, text colour, glow colour, glow size, and glow feather
   settings for Now Playing metadata, top lyrics, and bottom lyrics.
 
@@ -185,9 +186,10 @@ an optional next line like a karaoke view. Plain, untimed lyrics are ignored. Th
 top and bottom lyric lines have separate font, colour, and glow
 settings. Lyrics retain timed blank lines and show a 3/2/1-dot countdown during
 the final 3 seconds before lyrics resume after a blank gap.
-Use `Ctrl+Shift+Left` and `Ctrl+Shift+Right` while a song is playing to adjust
-that song's lyric timing offset in 250 ms steps. The offset is stored in that
-song's cached lyric JSON as `pwvizOffsetMs`.
+The settings window includes a lyrics editor for the current song. Paste
+LRC-style timestamped lyrics, adjust the offset in milliseconds, and use the
+highlighted active row to check timing before saving. The offset is stored in
+that song's cached lyric JSON as `pwvizOffsetMs`.
 
 When the latest audio buffer is silent, the visualizer skips FFT analysis and
 feeds zero levels through the normal bar and peak decay path. Once all bars and

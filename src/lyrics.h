@@ -20,6 +20,12 @@ typedef struct {
 void pwviz_lyrics_clear(PwvizLyrics *lyrics);
 void pwviz_lyrics_free(PwvizLyrics *lyrics);
 PwvizLyrics *pwviz_lyrics_fetch(const PwvizNowPlaying *now_playing);
+gboolean pwviz_lyrics_cached_text_for_track(const PwvizNowPlaying *now_playing,
+                                            char **synced_lyrics,
+                                            gint64 *offset_ms);
+gboolean pwviz_lyrics_save_text_for_track(const PwvizNowPlaying *now_playing,
+                                          const char *synced_lyrics,
+                                          gint64 offset_ms);
 void pwviz_lyrics_current_lines(const PwvizLyrics *lyrics, gint64 position_us,
                                 const char **current, const char **next);
 gboolean pwviz_lyrics_adjust_offset(PwvizLyrics *lyrics, gint64 delta_ms);

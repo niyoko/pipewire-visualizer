@@ -12,9 +12,11 @@
 #include <gtk4-layer-shell.h>
 #include <math.h>
 #include <pango/pangocairo.h>
+#include <stdio.h>
 
 #define COLOR_CACHE_LEVELS 256
 #define SILENCE_SAMPLE_THRESHOLD 0.00001f
+#define LYRICS_EDITOR_MAX_OFFSET_MS 600000
 
 typedef struct {
   double red;
@@ -31,6 +33,10 @@ typedef struct {
 typedef struct {
   GtkWindow *window;
   GtkWindow *config_window;
+  GtkWindow *lyrics_editor_window;
+  GtkWidget *lyrics_editor_text_view;
+  GtkWidget *lyrics_editor_offset;
+  GtkWidget *lyrics_editor_status;
   GtkWidget *drawing_area;
   PwvizAudioBuffer *audio_buffer;
   PwvizGlobalShortcut *global_shortcut;
@@ -64,12 +70,12 @@ typedef struct {
   int now_playing_cached_height;
   guint animation_source;
   guint now_playing_source;
-  guint lyrics_offset_message_source;
+  guint lyrics_editor_source;
   GAsyncQueue *lyrics_results;
   gboolean lyrics_fetching;
   char lyrics_key[512];
   char lyrics_fetching_key[512];
-  char lyrics_offset_message[64];
+  char lyrics_editor_key[512];
   gboolean color_cache_valid;
   gboolean audio_silent;
   double silence_fade_alpha;
@@ -93,8 +99,6 @@ typedef enum {
 enum {
   INACTIVE_BAR_ALPHA = 0,
   TARGET_FPS = 60,
-  LYRICS_OFFSET_STEP_MS = 250,
-  LYRICS_OFFSET_MESSAGE_MS = 1600,
 };
 
 typedef struct {
@@ -636,9 +640,7 @@ static void draw_now_playing(PwvizVisualizer *visualizer, cairo_t *cr,
     return;
   }
 
-  char *text = visualizer->lyrics_offset_message[0] != '\0'
-                   ? g_strdup(visualizer->lyrics_offset_message)
-                   : now_playing_text(visualizer);
+  char *text = now_playing_text(visualizer);
   if (!text || text[0] == '\0') {
     g_free(text);
     return;
@@ -2400,12 +2402,350 @@ static GtkWidget *now_playing_field_toggle(PwvizVisualizer *visualizer,
   return button;
 }
 
+static gboolean lyric_editor_parse_time(const char *line, gint64 *time_ms) {
+  while (g_ascii_isspace(*line))
+    line++;
+  if (line[0] != '[')
+    return FALSE;
+
+  const char *end = strchr(line, ']');
+  if (!end)
+    return FALSE;
+
+  char stamp[32];
+  gsize length = MIN((gsize)(end - line - 1), sizeof(stamp) - 1);
+  memcpy(stamp, line + 1, length);
+  stamp[length] = '\0';
+
+  int minutes = 0;
+  double seconds = 0.0;
+  if (sscanf(stamp, "%d:%lf", &minutes, &seconds) != 2)
+    return FALSE;
+
+  *time_ms = (gint64)minutes * 60000 + (gint64)(seconds * 1000.0 + 0.5);
+  return TRUE;
+}
+
+static int lyric_editor_active_line(const char *text, gint64 position_ms) {
+  char **lines = g_strsplit(text ? text : "", "\n", -1);
+  gint64 best_time = -1;
+  int active_line = -1;
+
+  for (int i = 0; lines[i]; i++) {
+    gint64 line_time = 0;
+    if (!lyric_editor_parse_time(lines[i], &line_time))
+      continue;
+    if (line_time <= position_ms && line_time >= best_time) {
+      best_time = line_time;
+      active_line = i;
+    }
+  }
+
+  g_strfreev(lines);
+  return active_line;
+}
+
+static GtkTextBuffer *lyrics_editor_buffer(PwvizVisualizer *visualizer) {
+  return visualizer->lyrics_editor_text_view
+             ? gtk_text_view_get_buffer(
+                   GTK_TEXT_VIEW(visualizer->lyrics_editor_text_view))
+             : NULL;
+}
+
+static char *lyrics_editor_text(PwvizVisualizer *visualizer) {
+  GtkTextBuffer *buffer = lyrics_editor_buffer(visualizer);
+  GtkTextIter start;
+  GtkTextIter end;
+
+  if (!buffer)
+    return g_strdup("");
+
+  gtk_text_buffer_get_bounds(buffer, &start, &end);
+  return gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+}
+
+static void lyrics_editor_set_status(PwvizVisualizer *visualizer,
+                                     const char *message) {
+  if (visualizer->lyrics_editor_status)
+    gtk_label_set_text(GTK_LABEL(visualizer->lyrics_editor_status),
+                       message ? message : "");
+}
+
+static void lyrics_editor_load_current_track(PwvizVisualizer *visualizer) {
+  GtkTextBuffer *buffer = lyrics_editor_buffer(visualizer);
+  char *synced = NULL;
+  gint64 offset_ms = visualizer->lyrics ? visualizer->lyrics->offset_ms : 0;
+
+  if (!buffer)
+    return;
+
+  if (!visualizer->now_playing.available ||
+      visualizer->now_playing.title[0] == '\0') {
+    gtk_text_buffer_set_text(buffer, "", -1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(visualizer->lyrics_editor_offset),
+                              0.0);
+    visualizer->lyrics_editor_key[0] = '\0';
+    lyrics_editor_set_status(visualizer, "No current song.");
+    return;
+  }
+
+  pwviz_lyrics_key_for_track(&visualizer->now_playing,
+                             visualizer->lyrics_editor_key,
+                             sizeof(visualizer->lyrics_editor_key));
+  if (pwviz_lyrics_cached_text_for_track(&visualizer->now_playing, &synced,
+                                         &offset_ms)) {
+    gtk_text_buffer_set_text(buffer, synced ? synced : "", -1);
+    lyrics_editor_set_status(visualizer, "Loaded cached lyrics.");
+  } else {
+    gtk_text_buffer_set_text(buffer, "", -1);
+    lyrics_editor_set_status(visualizer, "No cached lyrics for this song.");
+  }
+  gtk_spin_button_set_value(GTK_SPIN_BUTTON(visualizer->lyrics_editor_offset),
+                            offset_ms);
+  g_free(synced);
+}
+
+static void lyrics_editor_update_highlight(PwvizVisualizer *visualizer) {
+  GtkTextBuffer *buffer = lyrics_editor_buffer(visualizer);
+  GtkTextTagTable *tags;
+  GtkTextTag *tag;
+  GtkTextIter start;
+  GtkTextIter end;
+  char *text;
+  int active_line;
+  gint64 offset_ms;
+  gint64 position_ms;
+
+  if (!buffer || !visualizer->now_playing.available)
+    return;
+
+  tags = gtk_text_buffer_get_tag_table(buffer);
+  tag = gtk_text_tag_table_lookup(tags, "active-lyric");
+  if (!tag)
+    tag = gtk_text_buffer_create_tag(buffer, "active-lyric", "background",
+                                     "#335d83", "foreground", "#ffffff",
+                                     "weight", PANGO_WEIGHT_BOLD, NULL);
+
+  gtk_text_buffer_get_bounds(buffer, &start, &end);
+  gtk_text_buffer_remove_tag(buffer, tag, &start, &end);
+
+  text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+  offset_ms = gtk_spin_button_get_value_as_int(
+      GTK_SPIN_BUTTON(visualizer->lyrics_editor_offset));
+  position_ms = MAX(0, visualizer->now_playing.position_us / 1000 - offset_ms);
+  active_line = lyric_editor_active_line(text, position_ms);
+  g_free(text);
+
+  if (active_line < 0)
+    return;
+
+  gtk_text_buffer_get_iter_at_line(buffer, &start, active_line);
+  end = start;
+  if (!gtk_text_iter_ends_line(&end))
+    gtk_text_iter_forward_to_line_end(&end);
+  gtk_text_buffer_apply_tag(buffer, tag, &start, &end);
+  if (visualizer->lyrics_editor_text_view)
+    gtk_text_view_scroll_to_iter(GTK_TEXT_VIEW(visualizer->lyrics_editor_text_view),
+                                 &start, 0.12, FALSE, 0.0, 0.0);
+}
+
+static gboolean lyrics_editor_tick_cb(gpointer data) {
+  PwvizVisualizer *visualizer = data;
+
+  if (!visualizer->lyrics_editor_window) {
+    visualizer->lyrics_editor_source = 0;
+    return G_SOURCE_REMOVE;
+  }
+
+  char key[512] = "";
+  if (visualizer->now_playing.available &&
+      visualizer->now_playing.title[0] != '\0')
+    pwviz_lyrics_key_for_track(&visualizer->now_playing, key, sizeof(key));
+  if (g_strcmp0(key, visualizer->lyrics_editor_key) != 0)
+    lyrics_editor_load_current_track(visualizer);
+
+  lyrics_editor_update_highlight(visualizer);
+  return G_SOURCE_CONTINUE;
+}
+
+static void lyrics_editor_reload_visualizer(PwvizVisualizer *visualizer) {
+  char key[512] = "";
+
+  pwviz_lyrics_free(visualizer->lyrics);
+  visualizer->lyrics = pwviz_lyrics_fetch(&visualizer->now_playing);
+  if (visualizer->lyrics)
+    g_strlcpy(visualizer->lyrics_key, visualizer->lyrics->key,
+              sizeof(visualizer->lyrics_key));
+  else if (visualizer->now_playing.available &&
+           visualizer->now_playing.title[0] != '\0') {
+    pwviz_lyrics_key_for_track(&visualizer->now_playing, key, sizeof(key));
+    g_strlcpy(visualizer->lyrics_key, key, sizeof(visualizer->lyrics_key));
+  } else {
+    visualizer->lyrics_key[0] = '\0';
+  }
+
+  invalidate_now_playing_height(visualizer);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_editor_load_clicked_cb(GtkButton *button, gpointer data) {
+  (void)button;
+
+  lyrics_editor_load_current_track(data);
+}
+
+static void lyrics_editor_clear_clicked_cb(GtkButton *button, gpointer data) {
+  (void)button;
+
+  PwvizVisualizer *visualizer = data;
+  GtkTextBuffer *buffer = lyrics_editor_buffer(visualizer);
+  if (buffer)
+    gtk_text_buffer_set_text(buffer, "", -1);
+  lyrics_editor_set_status(visualizer, "Editor cleared.");
+}
+
+static void lyrics_editor_save_clicked_cb(GtkButton *button, gpointer data) {
+  (void)button;
+
+  PwvizVisualizer *visualizer = data;
+  char *text = lyrics_editor_text(visualizer);
+  gint64 offset_ms = gtk_spin_button_get_value_as_int(
+      GTK_SPIN_BUTTON(visualizer->lyrics_editor_offset));
+
+  if (!visualizer->now_playing.available ||
+      visualizer->now_playing.title[0] == '\0') {
+    lyrics_editor_set_status(visualizer, "No current song to save.");
+    g_free(text);
+    return;
+  }
+
+  if (pwviz_lyrics_save_text_for_track(&visualizer->now_playing, text,
+                                       offset_ms)) {
+    pwviz_lyrics_key_for_track(&visualizer->now_playing,
+                               visualizer->lyrics_editor_key,
+                               sizeof(visualizer->lyrics_editor_key));
+    lyrics_editor_reload_visualizer(visualizer);
+    lyrics_editor_set_status(visualizer, "Saved lyrics for current song.");
+  } else {
+    lyrics_editor_set_status(visualizer, "Failed to save lyrics.");
+  }
+
+  g_free(text);
+}
+
+static void lyrics_editor_offset_changed_cb(GtkSpinButton *spin,
+                                            gpointer data) {
+  PwvizVisualizer *visualizer = data;
+  char key[512] = "";
+
+  if (visualizer->lyrics && visualizer->now_playing.available &&
+      visualizer->now_playing.title[0] != '\0') {
+    pwviz_lyrics_key_for_track(&visualizer->now_playing, key, sizeof(key));
+    if (g_strcmp0(key, visualizer->lyrics->key) == 0)
+      visualizer->lyrics->offset_ms = gtk_spin_button_get_value_as_int(spin);
+  }
+
+  lyrics_editor_update_highlight(visualizer);
+  queue_visualizer_draw(visualizer);
+}
+
+static void lyrics_editor_destroy_cb(GtkWindow *window, gpointer data) {
+  (void)window;
+
+  PwvizVisualizer *visualizer = data;
+  if (visualizer->lyrics_editor_source) {
+    g_source_remove(visualizer->lyrics_editor_source);
+    visualizer->lyrics_editor_source = 0;
+  }
+  visualizer->lyrics_editor_window = NULL;
+  visualizer->lyrics_editor_text_view = NULL;
+  visualizer->lyrics_editor_offset = NULL;
+  visualizer->lyrics_editor_status = NULL;
+  visualizer->lyrics_editor_key[0] = '\0';
+}
+
+static void open_lyrics_editor(PwvizVisualizer *visualizer) {
+  if (visualizer->lyrics_editor_window) {
+    gtk_window_present(visualizer->lyrics_editor_window);
+    return;
+  }
+
+  GtkWidget *window = gtk_window_new();
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+  GtkWidget *toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *scroller = gtk_scrolled_window_new();
+  GtkWidget *text_view = gtk_text_view_new();
+  GtkWidget *offset =
+      gtk_spin_button_new_with_range(-LYRICS_EDITOR_MAX_OFFSET_MS,
+                                     LYRICS_EDITOR_MAX_OFFSET_MS, 250);
+  GtkWidget *load = gtk_button_new_with_label("Load cached");
+  GtkWidget *save = gtk_button_new_with_label("Save");
+  GtkWidget *clear = gtk_button_new_with_label("Clear");
+  GtkWidget *status = gtk_label_new("");
+
+  visualizer->lyrics_editor_window = GTK_WINDOW(window);
+  visualizer->lyrics_editor_text_view = text_view;
+  visualizer->lyrics_editor_offset = offset;
+  visualizer->lyrics_editor_status = status;
+
+  gtk_window_set_title(GTK_WINDOW(window), "Lyrics Editor");
+  gtk_window_set_default_size(GTK_WINDOW(window), 760, 520);
+  if (visualizer->config_window)
+    gtk_window_set_transient_for(GTK_WINDOW(window), visualizer->config_window);
+
+  gtk_widget_set_margin_top(box, 12);
+  gtk_widget_set_margin_bottom(box, 12);
+  gtk_widget_set_margin_start(box, 12);
+  gtk_widget_set_margin_end(box, 12);
+  gtk_text_view_set_monospace(GTK_TEXT_VIEW(text_view), TRUE);
+  gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(text_view), GTK_WRAP_NONE);
+  gtk_widget_set_vexpand(scroller, TRUE);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), text_view);
+  gtk_label_set_xalign(GTK_LABEL(status), 0.0f);
+  prepare_spin(offset);
+
+  gtk_box_append(GTK_BOX(toolbar), gtk_label_new("Offset ms"));
+  gtk_box_append(GTK_BOX(toolbar), offset);
+  gtk_box_append(GTK_BOX(toolbar), load);
+  gtk_box_append(GTK_BOX(toolbar), save);
+  gtk_box_append(GTK_BOX(toolbar), clear);
+
+  gtk_box_append(GTK_BOX(box), toolbar);
+  gtk_box_append(GTK_BOX(box), scroller);
+  gtk_box_append(GTK_BOX(box), status);
+  gtk_window_set_child(GTK_WINDOW(window), box);
+
+  g_signal_connect(load, "clicked", G_CALLBACK(lyrics_editor_load_clicked_cb),
+                   visualizer);
+  g_signal_connect(save, "clicked", G_CALLBACK(lyrics_editor_save_clicked_cb),
+                   visualizer);
+  g_signal_connect(clear, "clicked", G_CALLBACK(lyrics_editor_clear_clicked_cb),
+                   visualizer);
+  g_signal_connect(offset, "value-changed",
+                   G_CALLBACK(lyrics_editor_offset_changed_cb), visualizer);
+  g_signal_connect(window, "destroy", G_CALLBACK(lyrics_editor_destroy_cb),
+                   visualizer);
+
+  lyrics_editor_load_current_track(visualizer);
+  lyrics_editor_update_highlight(visualizer);
+  visualizer->lyrics_editor_source =
+      g_timeout_add(250, lyrics_editor_tick_cb, visualizer);
+  gtk_window_present(GTK_WINDOW(window));
+}
+
+static void lyrics_editor_clicked_cb(GtkButton *button, gpointer data) {
+  (void)button;
+
+  open_lyrics_editor(data);
+}
+
 static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
   GtkWidget *scroller = gtk_scrolled_window_new();
   GtkWidget *box = tab_box();
   GtkWidget *enabled = gtk_check_button_new_with_label("Show Now Playing");
   GtkWidget *lyrics = gtk_check_button_new_with_label("Fetch lyrics");
   GtkWidget *two_lines = gtk_check_button_new_with_label("Two lyric lines");
+  GtkWidget *lyrics_editor = gtk_button_new_with_label("Open lyrics editor");
   GtkWidget *fields = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *height = gtk_spin_button_new_with_range(0, 160, 1);
   GtkWidget *font =
@@ -2485,6 +2825,8 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
                    visualizer);
   g_signal_connect(two_lines, "toggled",
                    G_CALLBACK(lyrics_two_lines_toggled_cb), visualizer);
+  g_signal_connect(lyrics_editor, "clicked",
+                   G_CALLBACK(lyrics_editor_clicked_cb), visualizer);
   g_signal_connect(height, "value-changed",
                    G_CALLBACK(now_playing_height_changed_cb), visualizer);
   g_signal_connect(glow_size, "value-changed",
@@ -2523,6 +2865,7 @@ static GtkWidget *build_now_playing_tab(PwvizVisualizer *visualizer) {
   gtk_box_append(GTK_BOX(box), section_label("Lyrics"));
   gtk_box_append(GTK_BOX(box), lyrics);
   gtk_box_append(GTK_BOX(box), two_lines);
+  gtk_box_append(GTK_BOX(box), lyrics_editor);
   gtk_box_append(GTK_BOX(box), section_label("Top Lyric"));
   gtk_box_append(GTK_BOX(box), control_row("Top font", lyrics_top_font));
   gtk_box_append(GTK_BOX(box),
@@ -2678,54 +3021,8 @@ static void show_config_window(PwvizVisualizer *visualizer) {
   gtk_window_present(GTK_WINDOW(window));
 }
 
-static gboolean lyrics_offset_message_clear_cb(gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  if (!visualizer || visualizer->destroying)
-    return G_SOURCE_REMOVE;
-
-  visualizer->lyrics_offset_message_source = 0;
-  visualizer->lyrics_offset_message[0] = '\0';
-  queue_visualizer_draw(visualizer);
-  return G_SOURCE_REMOVE;
-}
-
-static gboolean adjust_lyrics_offset(PwvizVisualizer *visualizer,
-                                     gint64 delta_ms) {
-  if (!visualizer || !visualizer->lyrics ||
-      !pwviz_lyrics_adjust_offset(visualizer->lyrics, delta_ms))
-    return FALSE;
-
-  g_snprintf(visualizer->lyrics_offset_message,
-             sizeof(visualizer->lyrics_offset_message),
-             "Lyrics offset: %+" G_GINT64_FORMAT " ms",
-             visualizer->lyrics->offset_ms);
-  if (visualizer->lyrics_offset_message_source)
-    g_source_remove(visualizer->lyrics_offset_message_source);
-  visualizer->lyrics_offset_message_source =
-      g_timeout_add(LYRICS_OFFSET_MESSAGE_MS, lyrics_offset_message_clear_cb,
-                    visualizer);
-  g_message("Lyrics offset: %" G_GINT64_FORMAT " ms",
-            visualizer->lyrics->offset_ms);
-  queue_visualizer_draw(visualizer);
-  return TRUE;
-}
-
-static void global_shortcut_cb(PwvizGlobalShortcutAction action,
-                               gpointer data) {
-  PwvizVisualizer *visualizer = data;
-
-  switch (action) {
-  case PWVIZ_GLOBAL_SHORTCUT_OPEN_SETTINGS:
-    show_config_window(visualizer);
-    break;
-  case PWVIZ_GLOBAL_SHORTCUT_LYRICS_OFFSET_BACK:
-    adjust_lyrics_offset(visualizer, -LYRICS_OFFSET_STEP_MS);
-    break;
-  case PWVIZ_GLOBAL_SHORTCUT_LYRICS_OFFSET_FORWARD:
-    adjust_lyrics_offset(visualizer, LYRICS_OFFSET_STEP_MS);
-    break;
-  }
+static void global_shortcut_cb(gpointer data) {
+  show_config_window(data);
 }
 
 static gboolean key_pressed_cb(GtkEventControllerKey *controller, guint keyval,
@@ -2742,11 +3039,6 @@ static gboolean key_pressed_cb(GtkEventControllerKey *controller, guint keyval,
     show_config_window(data);
     return TRUE;
   }
-
-  if (ctrl && shift && !alt && keyval == GDK_KEY_Left)
-    return adjust_lyrics_offset(data, -LYRICS_OFFSET_STEP_MS);
-  if (ctrl && shift && !alt && keyval == GDK_KEY_Right)
-    return adjust_lyrics_offset(data, LYRICS_OFFSET_STEP_MS);
 
   return FALSE;
 }
@@ -2873,8 +3165,17 @@ static void visualizer_free(PwvizVisualizer *visualizer) {
     g_source_remove(visualizer->animation_source);
   if (visualizer->now_playing_source)
     g_source_remove(visualizer->now_playing_source);
-  if (visualizer->lyrics_offset_message_source)
-    g_source_remove(visualizer->lyrics_offset_message_source);
+  if (visualizer->lyrics_editor_source) {
+    g_source_remove(visualizer->lyrics_editor_source);
+    visualizer->lyrics_editor_source = 0;
+  }
+  if (visualizer->lyrics_editor_window &&
+      GTK_IS_WINDOW(visualizer->lyrics_editor_window)) {
+    GtkWindow *lyrics_editor_window = visualizer->lyrics_editor_window;
+
+    visualizer->lyrics_editor_window = NULL;
+    gtk_window_destroy(lyrics_editor_window);
+  }
   if (visualizer->config_window && GTK_IS_WINDOW(visualizer->config_window)) {
     GtkWindow *config_window = visualizer->config_window;
 

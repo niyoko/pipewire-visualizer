@@ -335,6 +335,91 @@ PwvizLyrics *pwviz_lyrics_fetch(const PwvizNowPlaying *now_playing) {
   return lyrics;
 }
 
+gboolean pwviz_lyrics_cached_text_for_track(const PwvizNowPlaying *now_playing,
+                                            char **synced_lyrics,
+                                            gint64 *offset_ms) {
+  if (synced_lyrics)
+    *synced_lyrics = NULL;
+  if (offset_ms)
+    *offset_ms = 0;
+  if (!now_playing->available || now_playing->title[0] == '\0')
+    return FALSE;
+
+  char key[512];
+  pwviz_lyrics_key_for_track(now_playing, key, sizeof(key));
+  char *path = cache_path_for_key(key);
+  char *json_data = read_cached_json(path);
+  JsonParser *parser = NULL;
+  GError *error = NULL;
+  gboolean loaded = FALSE;
+
+  if (!json_data)
+    goto done;
+
+  parser = json_parser_new();
+  if (!json_parser_load_from_data(parser, json_data, -1, &error))
+    goto done;
+
+  JsonNode *root = json_parser_get_root(parser);
+  if (!JSON_NODE_HOLDS_OBJECT(root))
+    goto done;
+
+  JsonObject *object = json_node_get_object(root);
+  const char *synced = json_object_get_string_member_with_default(
+      object, "syncedLyrics", "");
+  if (synced_lyrics)
+    *synced_lyrics = g_strdup(synced ? synced : "");
+  if (offset_ms && json_object_has_member(object, PWVIZ_LYRICS_OFFSET_KEY))
+    *offset_ms =
+        CLAMP(json_object_get_int_member(object, PWVIZ_LYRICS_OFFSET_KEY),
+              -PWVIZ_LYRICS_MAX_OFFSET_MS, PWVIZ_LYRICS_MAX_OFFSET_MS);
+  loaded = TRUE;
+
+done:
+  g_clear_error(&error);
+  if (parser)
+    g_object_unref(parser);
+  g_free(json_data);
+  g_free(path);
+  return loaded;
+}
+
+gboolean pwviz_lyrics_save_text_for_track(const PwvizNowPlaying *now_playing,
+                                          const char *synced_lyrics,
+                                          gint64 offset_ms) {
+  if (!now_playing->available || now_playing->title[0] == '\0')
+    return FALSE;
+
+  char key[512];
+  pwviz_lyrics_key_for_track(now_playing, key, sizeof(key));
+  char *path = cache_path_for_key(key);
+  JsonBuilder *builder = json_builder_new();
+  JsonGenerator *generator = json_generator_new();
+  gboolean written = FALSE;
+
+  offset_ms = CLAMP(offset_ms, -PWVIZ_LYRICS_MAX_OFFSET_MS,
+                    PWVIZ_LYRICS_MAX_OFFSET_MS);
+
+  json_builder_begin_object(builder);
+  json_builder_set_member_name(builder, "syncedLyrics");
+  json_builder_add_string_value(builder, synced_lyrics ? synced_lyrics : "");
+  json_builder_set_member_name(builder, PWVIZ_LYRICS_OFFSET_KEY);
+  json_builder_add_int_value(builder, offset_ms);
+  json_builder_end_object(builder);
+
+  JsonNode *root = json_builder_get_root(builder);
+  json_generator_set_root(generator, root);
+  char *data = json_generator_to_data(generator, NULL);
+  written = g_file_set_contents(path, data, -1, NULL);
+
+  g_free(data);
+  json_node_unref(root);
+  g_object_unref(generator);
+  g_object_unref(builder);
+  g_free(path);
+  return written;
+}
+
 void pwviz_lyrics_current_lines(const PwvizLyrics *lyrics, gint64 position_us,
                                 const char **current, const char **next) {
   *current = NULL;
