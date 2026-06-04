@@ -133,10 +133,17 @@ static PwvizWindowAnchor anchor_from_string(const char *value) {
   return PWVIZ_ANCHOR_BOTTOM_RIGHT;
 }
 
+static PwvizBarStyle bar_style_from_int(int value) {
+  if (value < PWVIZ_BAR_STYLE_SOFT_FLAME || value > PWVIZ_BAR_STYLE_RANDOM)
+    return PWVIZ_BAR_STYLE_SOFT_FLAME;
+
+  return value;
+}
+
 void pwviz_app_config_set_defaults(PwvizAppConfig *config) {
   config->analyzer_mode = PWVIZ_ANALYZER_BARS;
   config->level_mode = PWVIZ_LEVEL_AVERAGE;
-  config->bar_style = PWVIZ_BAR_STYLE_CLASSIC;
+  config->bar_style = PWVIZ_BAR_STYLE_SOFT_FLAME;
   config->background_mode = PWVIZ_BACKGROUND_BLACK;
   config->peak_color_mode = PWVIZ_PEAK_COLOR_LEVEL_FADE;
   config->peak_motion = PWVIZ_PEAK_MOTION_FALL;
@@ -400,9 +407,8 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
         CLAMP(g_key_file_get_integer(key_file, "Style", "block_height", NULL),
               1, 16);
   if (has_key(key_file, "Style", "bar_style"))
-    config->bar_style =
-        CLAMP(g_key_file_get_integer(key_file, "Style", "bar_style", NULL),
-              PWVIZ_BAR_STYLE_CLASSIC, PWVIZ_BAR_STYLE_RANDOM);
+    config->bar_style = bar_style_from_int(
+        g_key_file_get_integer(key_file, "Style", "bar_style", NULL));
   if (has_key(key_file, "Style", "peak_color_mode"))
     config->peak_color_mode =
         CLAMP(g_key_file_get_integer(key_file, "Style", "peak_color_mode",
@@ -424,9 +430,6 @@ void pwviz_app_config_load(PwvizAppConfig *config) {
     config->bar_alpha =
         CLAMP(g_key_file_get_double(key_file, "Style", "bar_alpha", NULL), 0.0,
               1.0);
-  get_color(key_file, "Colour Factory", "low_color", &config->low_color);
-  get_color(key_file, "Colour Factory", "high_color", &config->high_color);
-  get_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
   config->background_mode = PWVIZ_BACKGROUND_BLACK;
   config->background_alpha = 0.0;
   set_rgba(&config->background_color, 0.0, 0.0, 0.0, 0.0);
@@ -525,9 +528,6 @@ void pwviz_app_config_save(const PwvizAppConfig *config) {
   g_key_file_set_integer(key_file, "Style", "bar_width", config->bar_width);
   g_key_file_set_integer(key_file, "Style", "x_spacing", config->x_spacing);
   g_key_file_set_double(key_file, "Style", "bar_alpha", config->bar_alpha);
-  set_color(key_file, "Colour Factory", "low_color", &config->low_color);
-  set_color(key_file, "Colour Factory", "high_color", &config->high_color);
-  set_color(key_file, "Colour Factory", "peak_color", &config->peak_color);
   set_color(key_file, "Now Playing", "text_color",
             &config->now_playing_text_color);
   set_color(key_file, "Now Playing", "glow_color",

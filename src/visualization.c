@@ -153,7 +153,6 @@ static const AnchorOption ANCHOR_OPTIONS[] = {
 };
 
 static const RadioOption BAR_STYLE_OPTIONS[] = {
-    {PWVIZ_BAR_STYLE_CLASSIC, "Classic"},
     {PWVIZ_BAR_STYLE_SOFT_FLAME, "Soft Flame"},
     {PWVIZ_BAR_STYLE_FIRE, "Fire"},
     {PWVIZ_BAR_STYLE_SOLID_LINES, "Solid Lines"},
@@ -201,12 +200,6 @@ static void style_color(PwvizVisualizer *visualizer, int bar_index,
                         double level, double *red, double *green,
                         double *blue, double *source_alpha) {
   switch (visualizer->config.bar_style) {
-  case PWVIZ_BAR_STYLE_SOFT_FLAME:
-    *red = mix(0.72, 1.00, level);
-    *green = mix(0.05, 0.58, level);
-    *blue = mix(0.02, 0.16, level);
-    *source_alpha = mix(0.82, 1.0, level);
-    break;
   case PWVIZ_BAR_STYLE_FIRE:
     *red = mix(0.55, 1.00, level);
     *green = mix(0.00, 0.82, level);
@@ -244,16 +237,12 @@ static void style_color(PwvizVisualizer *visualizer, int bar_index,
     *blue = mix(*blue * 0.55, *blue, level);
     *source_alpha = 1.0;
     break;
-  case PWVIZ_BAR_STYLE_CLASSIC:
+  case PWVIZ_BAR_STYLE_SOFT_FLAME:
   default:
-    *red = mix(visualizer->config.low_color.red,
-               visualizer->config.high_color.red, level);
-    *green = mix(visualizer->config.low_color.green,
-                 visualizer->config.high_color.green, level);
-    *blue = mix(visualizer->config.low_color.blue,
-                visualizer->config.high_color.blue, level);
-    *source_alpha = mix(visualizer->config.low_color.alpha,
-                        visualizer->config.high_color.alpha, level);
+    *red = mix(0.72, 1.00, level);
+    *green = mix(0.05, 0.58, level);
+    *blue = mix(0.02, 0.16, level);
+    *source_alpha = mix(0.82, 1.0, level);
     break;
   }
 }
@@ -984,6 +973,7 @@ static void draw_spectrum_bar(PwvizVisualizer *visualizer, cairo_t *cr,
     double bar_value = visualizer->config.analyzer_mode == PWVIZ_ANALYZER_PEAK
                            ? visualizer->peak_caps[i]
                            : visualizer->bars[i];
+
     double h = bar_value * spectrum_height;
     double lit_top = spectrum_height - h;
     double top_lit_block_y = spectrum_height;
@@ -2441,28 +2431,6 @@ static GtkWidget *build_style_tab(PwvizVisualizer *visualizer) {
   return box;
 }
 
-static GtkWidget *build_colour_tab(PwvizVisualizer *visualizer) {
-  GtkWidget *box = tab_box();
-
-  gtk_box_append(GTK_BOX(box), section_label("Bars"));
-  gtk_box_append(GTK_BOX(box),
-                 control_row("Low colour",
-                             color_control(visualizer, COLOR_LOW,
-                                           &visualizer->config.low_color,
-                                           "Low Bar Colour")));
-  gtk_box_append(GTK_BOX(box),
-                 control_row("High colour",
-                             color_control(visualizer, COLOR_HIGH,
-                                           &visualizer->config.high_color,
-                                           "High Bar Colour")));
-  gtk_box_append(GTK_BOX(box),
-                 control_row("Peak colour",
-                             color_control(visualizer, COLOR_PEAK,
-                                           &visualizer->config.peak_color,
-                                           "Peak Colour")));
-  return box;
-}
-
 static GtkWidget *now_playing_field_toggle(PwvizVisualizer *visualizer,
                                            const char *label,
                                            const char *field,
@@ -3060,8 +3028,6 @@ static void show_config_window(PwvizVisualizer *visualizer) {
                            gtk_label_new("Layout"));
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_style_tab(visualizer),
                            gtk_label_new("Style"));
-  gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_colour_tab(visualizer),
-                           gtk_label_new("Colour Factory"));
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
                            build_now_playing_tab(visualizer),
                            gtk_label_new("Now Playing & Lyrics"));

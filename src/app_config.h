@@ -14,7 +14,6 @@ typedef enum {
 } PwvizLevelMode;
 
 typedef enum {
-  PWVIZ_BAR_STYLE_CLASSIC = 0,
   PWVIZ_BAR_STYLE_SOFT_FLAME = 1,
   PWVIZ_BAR_STYLE_FIRE = 2,
   PWVIZ_BAR_STYLE_SOLID_LINES = 3,

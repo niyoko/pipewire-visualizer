@@ -33,7 +33,7 @@ content, stays above normal windows, and is fully click-through.
   width, height, and click-through input behavior.
 - Configurable bar count or automatic bar count based on window width.
 - Native GTK settings window opened with `Ctrl+Shift+Alt+F12`, with organized
-  Analyzer, Layout, Style, Colour Factory, and Now Playing & Lyrics pages.
+  Analyzer, Layout, Style, and Now Playing & Lyrics pages.
 - MPRIS Now Playing metadata for player app, track title, artist, and album,
   with elapsed/total timer when available, configurable displayed fields,
   compact metadata-only layout when lyrics are unavailable, strip height,
@@ -164,14 +164,14 @@ settings window.
 Settings include analyzer mode, bar count, WACUP-style FFT equalization,
 envelope and scale, level mode, display threshold, target FPS, falloff, silence
 fade duration, window anchor, margins, size, bar width, spacing, block size,
-peak behavior, alpha, bar opacity, colours, Now Playing metadata, and lyrics.
+peak behavior, alpha, bar opacity, Now Playing metadata, and lyrics.
 
 The Style page exposes the Winamp-era categories shown by the
-original visualizer: Frequency Bars (`Classic`, `Soft Flame`, `Fire`,
-`Solid Lines`, `Winamp Fire`, `Random`), Peak Colour (`Fade`, `Level`,
-`Level & Fade`), and Motion (`Normal`, `Fall`, `Rise`, `Fall & Rise`,
-`Rise Fall`, `Sparks`). Peak indicators use the same thickness as bar rows and
-reserve the configured block gap above the lit bar stack.
+original visualizer: Frequency Bars (`Soft Flame`, `Fire`, `Solid Lines`,
+`Winamp Fire`, `Random`), Peak Colour (`Fade`, `Level`, `Level & Fade`), and
+Motion (`Normal`, `Fall`, `Rise`, `Fall & Rise`, `Rise Fall`, `Sparks`). Peak
+indicators use the same thickness as bar rows and reserve the configured block
+gap above the lit bar stack.
 
 The Now Playing section uses MPRIS metadata from the session bus when a player
 provides it. It can show the player app, track title, artist, and album in a
